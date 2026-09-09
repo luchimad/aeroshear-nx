@@ -1,0 +1,7 @@
+# Object and build artifacts
+*.o
+*.obj
+
+# Save data (fresh start for releases)
+records.dat
+screenshot*.png
