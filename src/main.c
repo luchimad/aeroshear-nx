@@ -177,6 +177,22 @@ int main(int argc, char *argv[]) {
             }
             if (captureFrame == 75) {
                 TakeScreenshot("alpha_settings.png");
+                gameState = GAME_STATE_PLAYING;
+                Race_Init(&race, selectedBiome, &player.position, &player.heading);
+                race.isCountdown = false;
+                race.isFinished = true;
+                race.qualifyingRank = 0;
+                race.nameEntered = false;
+                race.isNewRecord = true;
+                race.maxSpeedKmh = 1940.0f;
+                race.maxMach = 1.58f;
+                race.raceTimer = 72.75f;
+                race.finishTotalTime = 72.75f;
+                strcpy(race.pilotTag, "LUC");
+                race.tagCursor = 2;
+            }
+            if (captureFrame == 85) {
+                TakeScreenshot("alpha_debriefing.png");
                 break;
             }
         }
@@ -373,14 +389,25 @@ int main(int argc, char *argv[]) {
             }
 
             // Simulación física de vuelo
-            if (!race.isCountdown) {
+            if (!race.isCountdown && !race.isFinished) {
                 Player_Update(&player, &gameSettings, dt);
                 if (player.wallImpactTriggered) {
                     FlightCamera_AddTrauma(&flightCamera, 0.45f);
                     player.wallImpactTriggered = false;
                 }
+                FlightCamera_Update(&flightCamera, &player, dt);
+                Terrain_Update(&terrain, player.position);
+                Scenery_Update(&scenery, player.position);
+
+                const BiomeDefinition *bDef = Biome_Get(terrain.currentBiome);
+                FX_Update(&player, dt, bDef->hasWater, terrain.currentBiome == BIOME_HOTSANDS, bDef->waterLevel);
+
+                float speedRatio = player.forwardSpeed / player.afterburnerSpeed;
+                Audio_Update(speedRatio, player.isAfterburner, player.isAirbrake, player.altitudeAGL, dt);
+            } else if (race.isFinished) {
+                // Detener propulsión y audio de vuelo en segundo plano al cruzar la meta
+                Audio_Update(0.0f, false, false, player.altitudeAGL, dt);
             }
-            FlightCamera_Update(&flightCamera, &player, dt);
 
             Race_Update(&race, &player, dt);
             if (race.cameraSnapRequested) {
@@ -388,14 +415,7 @@ int main(int argc, char *argv[]) {
                 race.cameraSnapRequested = false;
             }
 
-            Terrain_Update(&terrain, player.position);
-            Scenery_Update(&scenery, player.position);
-
             const BiomeDefinition *bDef = Biome_Get(terrain.currentBiome);
-            FX_Update(&player, dt, bDef->hasWater, terrain.currentBiome == BIOME_HOTSANDS, bDef->waterLevel);
-
-            float speedRatio = player.forwardSpeed / player.afterburnerSpeed;
-            Audio_Update(speedRatio, player.isAfterburner, player.isAirbrake, player.altitudeAGL, dt);
 
             // PASS 1: Render 3D Scene en resolución nativa
             BeginTextureMode(sceneTarget);
@@ -414,7 +434,9 @@ int main(int argc, char *argv[]) {
                 FX_Draw2D(&player, curWidth, curHeight);
 
                 // PASS 2: Flight HUD tDR & Navegador
-                HUD_Draw(&player, curWidth, curHeight);
+                if (!race.isFinished) {
+                    HUD_Draw(&player, curWidth, curHeight);
+                }
                 Race_DrawHUD(&race, &player, &flightCamera.camera, curWidth, curHeight);
             EndTextureMode();
 

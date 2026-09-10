@@ -59,6 +59,10 @@ typedef struct RaceTrack {
     char pilotTag[4];
     int tagCursor;
 
+    float maxSpeedKmh;
+    float maxSpeedKnots;
+    float maxMach;
+
     Texture2D texPylon;
     Texture2D texRing;
     bool isTexturesLoaded;

@@ -17,22 +17,22 @@ static void InitDefaultLeaderboards(void) {
     static const struct {
         const char *tag; float time; float spd; const char *rank;
     } defaultDelta[TOP_SCORES_COUNT] = {
-        { "ACE", 88.45f,  1920.0f, "RANK S [ACE AVIATOR]" },
-        { "TDR", 94.20f,  1840.0f, "RANK S [ACE AVIATOR]" },
-        { "W03", 102.80f, 1760.0f, "RANK A [VETERAN]"     },
-        { "FEI", 109.15f, 1690.0f, "RANK A [VETERAN]"     },
-        { "AGS", 118.60f, 1620.0f, "RANK B [QUALIFIED]"   }
+        { "ACE", 88.45f,  1920.0f, "RANK S [ACE PILOT]"       },
+        { "TDR", 94.20f,  1840.0f, "RANK S [ACE PILOT]"       },
+        { "W03", 102.80f, 1760.0f, "RANK A [VETERAN PILOT]"   },
+        { "FEI", 109.15f, 1690.0f, "RANK A [VETERAN PILOT]"   },
+        { "AGS", 118.60f, 1620.0f, "RANK B [QUALIFIED PILOT]" }
     };
 
     // Récords por defecto Hot Sands (Desierto árido)
     static const struct {
         const char *tag; float time; float spd; const char *rank;
     } defaultHotsands[TOP_SCORES_COUNT] = {
-        { "PHZ", 92.10f,  1950.0f, "RANK S [ACE AVIATOR]" },
-        { "DNE", 98.50f,  1860.0f, "RANK S [ACE AVIATOR]" },
-        { "SKW", 105.30f, 1790.0f, "RANK A [VETERAN]"     },
-        { "SOL", 112.00f, 1710.0f, "RANK A [VETERAN]"     },
-        { "RAW", 121.40f, 1630.0f, "RANK B [QUALIFIED]"   }
+        { "PHZ", 92.10f,  1950.0f, "RANK S [ACE PILOT]"       },
+        { "DNE", 98.50f,  1860.0f, "RANK S [ACE PILOT]"       },
+        { "SKW", 105.30f, 1790.0f, "RANK A [VETERAN PILOT]"   },
+        { "SOL", 112.00f, 1710.0f, "RANK A [VETERAN PILOT]"   },
+        { "RAW", 121.40f, 1630.0f, "RANK B [QUALIFIED PILOT]" }
     };
 
     for (int i = 0; i < TOP_SCORES_COUNT; i++) {

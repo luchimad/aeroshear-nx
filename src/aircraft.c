@@ -2,14 +2,14 @@
 #include "config.h"
 #include <string.h>
 
-// Catálogo Modular de Aeronaves - Alpha Edition: AEROSHEAR RS-01 PHANTOM
+// Catálogo Modular de Hovercrafts - PoC Edition: AEROSHEAR RS-01 PHANTOM
 static AircraftDefinition s_aircraftDatabase[MAX_AIRCRAFT] = {
     {
         .id = "rs01",
         .name = "AEROSHEAR RS-01 PHANTOM",
-        .role = "HIGH-G TRANSONIC INTERCEPTOR",
-        .manufacturer = "AEROSHEAR AEROSPACE / SKUNKWORKS",
-        .description = "Air superiority and high-G racing craft. Optimized for rapid pitch-dive transitions and ground-shear kinetic retention.",
+        .role = "HIGH-G TRANSONIC HOVERCRAFT",
+        .manufacturer = "HCRB RACING BUREAU / SKUNKWORKS",
+        .description = "Official HCRB division hovercraft. Optimized for rapid pitch-dive transitions and ground-shear kinetic retention.",
         .cruiseSpeed = SPEED_CRUISE,
         .afterburnerSpeed = SPEED_AFTERBURNER,
         .turnRate = 1.75f,

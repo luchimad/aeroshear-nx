@@ -19,7 +19,7 @@ typedef struct HighscoreEntry {
     char pilotTag[PILOT_TAG_LEN];   // Iniciales del piloto (3 caracteres)
     float finishTime;               // Tiempo total de carrera en segundos
     float maxSpeedKmh;              // Velocidad máxima registrada (km/h)
-    char rank[32];                  // Rango alcanzado (ej. "RANK S [ACE AVIATOR]")
+    char rank[32];                  // Rango alcanzado (ej. "RANK S [ACE PILOT]")
     bool isValid;                   // Entrada válida o vacía
 } HighscoreEntry;
 

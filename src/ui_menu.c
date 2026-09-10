@@ -118,8 +118,8 @@ void Menu_DrawMainMenu(int screenWidth, int screenHeight) {
 
     // 3. Logo oficial en Neuropolitical y subtítulos con espaciado respirable
     UI_DrawTitleAeroshear(leftX, titleY, 1.0f, UI_COLOR_STEEL_WHITE);
-    UI_DrawTextTitle("FLIGHT CORE // PUBLIC ALPHA EDITION", (float)leftX, (float)(titleY + 56), 15.0f, UI_COLOR_AC4_CYAN);
-    UI_DrawTextHud("STANDALONE BUILD v0.1.0 // 60 FPS DETERMINISTIC CORE", (float)leftX, (float)(titleY + 80), 11.0f, UI_COLOR_MUTED_TEXT);
+    UI_DrawTextTitle("FLIGHT CORE // PROOF OF CONCEPT", (float)leftX, (float)(titleY + 56), 15.0f, UI_COLOR_AC4_CYAN);
+    UI_DrawTextHud("PoC Build 0.1", (float)leftX, (float)(titleY + 80), 11.0f, UI_COLOR_MUTED_TEXT);
 
     DrawLine(leftX, titleY + 102, leftX + 440, titleY + 102, (Color){ 45, 95, 145, 140 });
 
@@ -473,11 +473,11 @@ void Menu_DrawMapSelect(int screenWidth, int screenHeight, BiomeType selectedBio
         UI_DrawTextMenu("CIRCUIT RECORD: NO SORTIE LOGGED", (float)(cardX + 22), (float)(cardY + 200), 11.0f, UI_COLOR_MUTED_TEXT);
     }
 
-    UI_DrawNavHelp(screenWidth, screenHeight, "[ENTER / SPACE / (A)]: PROCEED TO HANGAR    [ESC / (B)]: BACK TO MAIN MENU");
+    UI_DrawNavHelp(screenWidth, screenHeight, "[ENTER / SPACE / (A)]: PROCEED TO HOVERCRAFT BAY    [ESC / (B)]: BACK TO MAIN MENU");
 }
 
 // ============================================================================
-// 3. SELECCIÓN DE VEHÍCULO (AEROSHEAR RS-01 PHANTOM)
+// 3. SELECCIÓN DE HOVERCRAFT (AEROSHEAR RS-01 PHANTOM)
 // ============================================================================
 MenuAction Menu_UpdateAircraftSelect(int *selectedAircraftIdx) {
     if (IsKeyPressed(KEY_ESCAPE)) return MENU_ACTION_TO_MAP_SELECT;
@@ -485,7 +485,7 @@ MenuAction Menu_UpdateAircraftSelect(int *selectedAircraftIdx) {
         return MENU_ACTION_TO_MAP_SELECT;
     }
 
-    if (selectedAircraftIdx) *selectedAircraftIdx = 0; // Solo RS-01 para Alpha
+    if (selectedAircraftIdx) *selectedAircraftIdx = 0; // RS-01 HCRB Spec
 
     if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)) {
         return MENU_ACTION_START_GAME;
@@ -502,7 +502,7 @@ void Menu_DrawAircraftSelect(int screenWidth, int screenHeight, int selectedAirc
 
     // Fondo reactivo táctico en Dark Future Blue
     UI_DrawTacticalBackdropEx(screenWidth, screenHeight, time, (Color){ 70, 160, 230, 255 });
-    UI_DrawScreenHeader(screenWidth, "AIRCRAFT HANGAR // FLIGHT REQUISITION", "PRIMARY TRANSONIC AIRFRAME FOR EVALUATION", "AVIONICS BAY // AIRFRAME: RS-01");
+    UI_DrawScreenHeader(screenWidth, "HOVERCRAFT BAY // HCRB REQUISITION", "PRIMARY TRANSONIC HOVERCRAFT // HCRB SPEC", "RACING DIVISION // CRAFT: RS-01");
 
     int leftX = (int)fmaxf(48.0f, (float)screenWidth * 0.085f);
     int topY = (int)((float)screenHeight * 0.16f);
@@ -516,7 +516,7 @@ void Menu_DrawAircraftSelect(int screenWidth, int screenHeight, int selectedAirc
     int previewY = topY + 65;
     Rectangle pRec = { (float)previewX, (float)previewY, (float)previewBoxW, (float)previewBoxH };
 
-    UI_DrawGlassPanel(pRec, "AIRFRAME HANGAR DOCK", UI_COLOR_AC4_CYAN, UI_COLOR_PANEL_BG);
+    UI_DrawGlassPanel(pRec, "HOVERCRAFT BAY DOCK", UI_COLOR_AC4_CYAN, UI_COLOR_PANEL_BG);
 
     if (previewSprite && previewSprite->isLoaded) {
         Rectangle src = {
@@ -573,7 +573,7 @@ void Menu_DrawAircraftSelect(int screenWidth, int screenHeight, int selectedAirc
     UI_DrawTextHud(TextFormat("CRUISE: %.0f M/S   AFTERBURNER: %.0f M/S", jet->cruiseSpeed, jet->afterburnerSpeed),
                    (float)(statsX + 25), (float)(statsY + statsH - 32), 10.0f, UI_COLOR_AC4_GREEN);
 
-    UI_DrawNavHelp(screenWidth, screenHeight, "[ENTER / SPACE / (A)]: COMMENCE FLIGHT SORTIE    [ESC / (B)]: BACK TO MAP SELECTION");
+    UI_DrawNavHelp(screenWidth, screenHeight, "[ENTER / SPACE / (A)]: COMMENCE RACE SORTIE    [ESC / (B)]: BACK TO CIRCUIT SELECTION");
 }
 
 // ============================================================================
@@ -804,7 +804,7 @@ void Menu_DrawControls(int screenWidth, int screenHeight) {
     int gpBottomY = cardY + 248;
     DrawLine(col2X + 18, gpBottomY, col2X + colW - 18, gpBottomY, (Color){ 35, 75, 115, 140 });
     UI_DrawTextHud("SYSTEM CORE: C99 / RAYLIB 5.0 // SUPER SCALER ENGINE", (float)(col2X + 20), (float)(gpBottomY + 12), 10.0f, UI_COLOR_MUTED_TEXT);
-    UI_DrawTextHud("STANDALONE PUBLIC ALPHA v0.1.0 // SUB-8MB FOOTPRINT", (float)(col2X + 20), (float)(gpBottomY + 28), 10.0f, UI_COLOR_MUTED_TEXT);
+    UI_DrawTextHud("PoC Build 0.1 // SUB-8MB FOOTPRINT // HCRB PROTOCOL", (float)(col2X + 20), (float)(gpBottomY + 28), 10.0f, UI_COLOR_MUTED_TEXT);
 
     UI_DrawNavHelp(screenWidth, screenHeight, "[ESC / ENTER / (B)]: RETURN TO MAIN MENU");
 }

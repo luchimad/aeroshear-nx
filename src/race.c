@@ -39,6 +39,10 @@ void Race_Init(RaceTrack *race, BiomeType biome, Vector3 *startPlayerPos, float 
     strcpy(race->pilotTag, "AAA");
     race->tagCursor = 0;
 
+    race->maxSpeedKmh = 0.0f;
+    race->maxSpeedKnots = 0.0f;
+    race->maxMach = 0.0f;
+
     const BiomeDefinition *bDef = Biome_Get(biome);
     snprintf(race->trackName, sizeof(race->trackName), "%s CIRCUIT", bDef->name);
 
@@ -154,6 +158,19 @@ static void Race_OnFinish(RaceTrack *race, const PlayerJet *player) {
     race->isFinished = true;
     race->finishTotalTime = race->raceTimer;
 
+    // Frenar y detener completamente el hovercraft al cruzar la meta
+    if (player) {
+        PlayerJet *p = (PlayerJet*)player;
+        p->forwardSpeed = 0.0f;
+        p->velocity = (Vector3){ 0 };
+        p->throttle = 0.0f;
+        p->isAfterburner = false;
+        p->isAirbrake = false;
+        p->speedKmh = 0.0f;
+        p->speedKnots = 0.0f;
+        p->machNumber = 0.0f;
+    }
+
     race->qualifyingRank = Records_CheckQualify(race->currentBiome, race->finishTotalTime);
     race->isNewRecord = (race->qualifyingRank == 0);
     if (race->qualifyingRank >= 0) {
@@ -234,11 +251,10 @@ void Race_Update(RaceTrack *race, PlayerJet *player, float dt) {
                 if (race->tagCursor < 2) {
                     race->tagCursor++;
                 } else {
-                    const char *rank = "RANK S [ACE AVIATOR]";
-                    if (race->finishTotalTime > 120.0f) rank = "RANK B [QUALIFIED]";
-                    else if (race->finishTotalTime > 100.0f) rank = "RANK A [VETERAN]";
-                    float spd = player ? player->speedKmh : 0.0f;
-                    Records_InsertScore(race->currentBiome, race->qualifyingRank, race->pilotTag, race->finishTotalTime, spd, rank);
+                    const char *rank = "RANK S [ACE PILOT]";
+                    if (race->finishTotalTime > 120.0f) rank = "RANK B [QUALIFIED PILOT]";
+                    else if (race->finishTotalTime > 100.0f) rank = "RANK A [VETERAN PILOT]";
+                    Records_InsertScore(race->currentBiome, race->qualifyingRank, race->pilotTag, race->finishTotalTime, race->maxSpeedKmh, rank);
                     race->nameEntered = true;
                 }
             }
@@ -247,6 +263,12 @@ void Race_Update(RaceTrack *race, PlayerJet *player, float dt) {
     }
 
     race->raceTimer += dt;
+
+    if (player) {
+        if (player->speedKmh > race->maxSpeedKmh) race->maxSpeedKmh = player->speedKmh;
+        if (player->speedKnots > race->maxSpeedKnots) race->maxSpeedKnots = player->speedKnots;
+        if (player->machNumber > race->maxMach) race->maxMach = player->machNumber;
+    }
 
     if (race->currentCheckpoint >= race->totalCheckpoints) {
         Race_OnFinish(race, player);
@@ -676,17 +698,17 @@ void Race_DrawHUD(const RaceTrack *race, const PlayerJet *player, const Camera3D
     if (race->isFinished) {
         DrawRectangle(0, 0, screenWidth, screenHeight, (Color){ 2, 4, 8, 225 });
 
-        int cardW = 560;
-        int cardH = 385;
+        int cardW = 620;
+        int cardH = 415;
         int cardX = (screenWidth - cardW) / 2;
         int cardY = (screenHeight - cardH) / 2;
         Rectangle debriefRec = { (float)cardX, (float)cardY, (float)cardW, (float)cardH };
 
-        UI_DrawGlassPanel(debriefRec, "TACTICAL FLIGHT DEBRIEFING", UI_COLOR_AC4_CYAN, UI_COLOR_PANEL_BG);
-        UI_DrawTextTitle("SORTIE COMPLETE // FLIGHT RECORD", (float)(cardX + 35), (float)(cardY + 26), 18.0f, UI_COLOR_STEEL_WHITE);
+        UI_DrawGlassPanel(debriefRec, "HCRB RACE DEBRIEFING", UI_COLOR_AC4_CYAN, UI_COLOR_PANEL_BG);
+        UI_DrawTextTitle("SORTIE COMPLETE // HCRB RECORD", (float)(cardX + 35), (float)(cardY + 26), 18.0f, UI_COLOR_STEEL_WHITE);
         DrawLine(cardX + 35, cardY + 52, cardX + cardW - 35, cardY + 52, (Color){ 35, 70, 95, 140 });
 
-        UI_DrawTextMenu("TOTAL FLIGHT DURATION:", (float)(cardX + 35), (float)(cardY + 66), 11.0f, UI_COLOR_MUTED_TEXT);
+        UI_DrawTextMenu("TOTAL RACE DURATION:", (float)(cardX + 35), (float)(cardY + 66), 11.0f, UI_COLOR_MUTED_TEXT);
         UI_DrawTextHud(TextFormat("%02d:%02d.%02d", tMin, tS, tC), (float)(cardX + 35), (float)(cardY + 82), 26.0f, UI_COLOR_STEEL_WHITE);
 
         const HighscoreEntry *curRec = Records_GetBest(race->currentBiome);
@@ -711,12 +733,12 @@ void Race_DrawHUD(const RaceTrack *race, const PlayerJet *player, const Camera3D
 
         int nextStatsY = (race->isNewRecord || race->qualifyingRank >= 0) ? 164 : 144;
         UI_DrawTextMenu(TextFormat("CHECKPOINTS CLEARED:    %02d / %02d", race->totalCheckpoints, race->totalCheckpoints), (float)(cardX + 35), (float)(cardY + nextStatsY), 13.0f, UI_COLOR_STEEL_WHITE);
-        UI_DrawTextMenu(TextFormat("AIRSPEED REACHED:       %04d KTS (MACH %.2f)", (int)player->speedKnots, player->machNumber), (float)(cardX + 35), (float)(cardY + nextStatsY + 24), 13.0f, UI_COLOR_STEEL_WHITE);
+        UI_DrawTextMenu(TextFormat("VEL MAX:                %04d KM/H (MACH %.2f)", (int)race->maxSpeedKmh, race->maxMach), (float)(cardX + 35), (float)(cardY + nextStatsY + 24), 13.0f, UI_COLOR_STEEL_WHITE);
 
-        const char *rank = "PILOT EVALUATION:  RANK S [ACE AVIATOR]";
+        const char *rank = "PILOT EVALUATION:  RANK S [ACE PILOT]";
         Color rankCol = UI_COLOR_AC4_GREEN;
-        if (race->finishTotalTime > 120.0f) { rank = "PILOT EVALUATION:  RANK B [QUALIFIED]"; rankCol = UI_COLOR_AC4_AMBER; }
-        else if (race->finishTotalTime > 100.0f) { rank = "PILOT EVALUATION:  RANK A [VETERAN]"; rankCol = UI_COLOR_AC4_CYAN; }
+        if (race->finishTotalTime > 120.0f) { rank = "PILOT EVALUATION:  RANK B [QUALIFIED PILOT]"; rankCol = UI_COLOR_AC4_AMBER; }
+        else if (race->finishTotalTime > 100.0f) { rank = "PILOT EVALUATION:  RANK A [VETERAN PILOT]"; rankCol = UI_COLOR_AC4_CYAN; }
 
         UI_DrawTextTitle(rank, (float)(cardX + 35), (float)(cardY + nextStatsY + 58), 15.0f, rankCol);
         DrawLine(cardX + 35, cardY + cardH - 50, cardX + cardW - 35, cardY + cardH - 50, (Color){ 35, 70, 95, 140 });
@@ -724,20 +746,20 @@ void Race_DrawHUD(const RaceTrack *race, const PlayerJet *player, const Camera3D
         // Caja de entrada de iniciales si clasificó en el Top 5
         if (!race->nameEntered && race->qualifyingRank >= 0) {
             int boxW = cardW - 70;
-            int boxH = 100;
+            int boxH = 106;
             int boxX = cardX + 35;
-            int boxY = cardY + cardH - 115;
+            int boxY = cardY + cardH - 124;
             Rectangle boxRec = { (float)boxX, (float)boxY, (float)boxW, (float)boxH };
 
             DrawRectangleRounded(boxRec, 0.15f, 4, (Color){ 4, 12, 22, 245 });
             DrawRectangleRoundedLinesEx(boxRec, 0.15f, 4, 1.2f, UI_COLOR_AC4_AMBER);
 
             const char *topStr = TextFormat("HALL OF FAME ENTRY // POSITION #%02d", race->qualifyingRank + 1);
-            UI_DrawTextHud(topStr, (float)(boxX + 16), (float)(boxY + 12), 11.0f, UI_COLOR_AC4_AMBER);
-            UI_DrawTextHud("ENTER 3-LETTER PILOT TAG:", (float)(boxX + 16), (float)(boxY + 28), 10.0f, UI_COLOR_STEEL_WHITE);
+            UI_DrawTextHud(topStr, (float)(boxX + 16), (float)(boxY + 14), 11.0f, UI_COLOR_AC4_AMBER);
+            UI_DrawTextHud("ENTER 3-LETTER PILOT TAG:", (float)(boxX + 16), (float)(boxY + 32), 10.0f, UI_COLOR_STEEL_WHITE);
 
             int charStartX = boxX + boxW - 145;
-            int charY = boxY + 14;
+            int charY = boxY + 16;
             for (int c = 0; c < 3; c++) {
                 Rectangle cRec = { (float)(charStartX + c * 38), (float)charY, 32.0f, 36.0f };
                 bool isCursor = (c == race->tagCursor);
@@ -758,8 +780,8 @@ void Race_DrawHUD(const RaceTrack *race, const PlayerJet *player, const Camera3D
                 }
             }
 
-            UI_DrawTextHud("[W/S / UP/DN]: LETTER    [ENTER / (A)]: CONFIRM CHAR    [A-Z]: DIRECT TYPE",
-                           (float)(boxX + 16), (float)(boxY + boxH - 22), 9.0f, (Color){ 110, 155, 185, 200 });
+            UI_DrawTextMenu("[W/S / UP/DN]: LETTER    [ENTER / (A)]: CONFIRM    [BKSP]: DELETE    [A-Z]: TYPE",
+                            (float)(boxX + 16), (float)(boxY + boxH - 20), 9.5f, (Color){ 125, 170, 200, 220 });
         } else {
             UI_DrawTextMenu("[ ESC ]: RETURN TO MENU      [ R / SPACE / (A) ]: RESTART", (float)(cardX + 35), (float)(cardY + cardH - 34), 12.0f, (Color){ 110, 155, 185, 200 });
         }
