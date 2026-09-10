@@ -5,32 +5,48 @@
 #include <stdbool.h>
 
 // ============================================================================
-// AEROSHEAR // LOCAL SAVE & CIRCUIT RECORDS SYSTEM
+// AEROSHEAR // LOCAL SAVE & CIRCUIT LEADERBOARD (HALL OF FAME TOP 5)
 // ============================================================================
 
-#define RECORDS_FILE_PATH   "records.dat"
-#define RECORDS_MAGIC       "ASNX"
-#define RECORDS_VERSION     1
+#define RECORDS_FILE_PATH       "records.dat"
+#define RECORDS_MAGIC           "ASNX"
+#define RECORDS_VERSION         2
 
-typedef struct CircuitRecord {
-    float bestTime;         // Mejor tiempo total en segundos
-    float maxSpeedKmh;      // Velocidad máxima registrada (km/h)
-    char rank[32];          // Rango de piloto (ej. "RANK S [ACE AVIATOR]")
-    bool hasRecord;         // Indica si existe un récord registrado
-} CircuitRecord;
+#define TOP_SCORES_COUNT        5
+#define PILOT_TAG_LEN           4   // 3 letras + null terminator (ej. "LUC", "ACE")
+
+typedef struct HighscoreEntry {
+    char pilotTag[PILOT_TAG_LEN];   // Iniciales del piloto (3 caracteres)
+    float finishTime;               // Tiempo total de carrera en segundos
+    float maxSpeedKmh;              // Velocidad máxima registrada (km/h)
+    char rank[32];                  // Rango alcanzado (ej. "RANK S [ACE AVIATOR]")
+    bool isValid;                   // Entrada válida o vacía
+} HighscoreEntry;
+
+typedef struct CircuitLeaderboard {
+    HighscoreEntry entries[TOP_SCORES_COUNT];
+} CircuitLeaderboard;
 
 typedef struct SaveData {
     char magic[4];
     int version;
-    CircuitRecord records[BIOME_COUNT];
+    CircuitLeaderboard boards[BIOME_COUNT];
     int totalSortiesCompleted;
 } SaveData;
 
 void Records_Init(void);
 void Records_Save(void);
-const CircuitRecord* Records_Get(BiomeType biome);
-bool Records_Submit(BiomeType biome, float time, float maxSpeedKmh, const char *rank);
+const CircuitLeaderboard* Records_GetLeaderboard(BiomeType biome);
+const HighscoreEntry* Records_GetBest(BiomeType biome);
+
+// Comprueba si un tiempo califica para el Top 5. Retorna posición 0..4, o -1 si no califica.
+int Records_CheckQualify(BiomeType biome, float time);
+
+// Inserta un puntaje en la posición obtenida, desplazando los puestos inferiores y guardando a disco.
+bool Records_InsertScore(BiomeType biome, int rankPos, const char *pilotTag, float time, float maxSpeedKmh, const char *rank);
+
 bool Records_IsNewRecord(void);
+int Records_GetLastQualifyingRank(void);
 void Records_ResetNewRecordFlag(void);
 
 #endif // RECORDS_H

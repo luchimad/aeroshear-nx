@@ -3,6 +3,7 @@
 #include "ui_theme.h"
 #include "ui_core.h"
 #include "fx.h"
+#include "music.h"
 #include "raymath.h"
 #include <math.h>
 
@@ -43,6 +44,37 @@ void HUD_Draw(const PlayerJet *player, int screenWidth, int screenHeight) {
     // 1. MARCO PERIMÉTRICO CAD DE 1PX Y MARCAS TÉCNICAS tDR
     // ========================================================================
     UI_DrawTDRCadFrame(screenWidth, screenHeight, hudCol);
+
+    // ========================================================================
+    // 1b. BANNER OSD MÚSICA EN CABINA (NOW PLAYING tDR SPEC)
+    // ========================================================================
+    float osdTimer = Music_GetOsdTimer();
+    if (osdTimer > 0.0f) {
+        float alpha = 1.0f;
+        if (osdTimer < 0.6f) alpha = osdTimer / 0.6f;
+        else if (osdTimer > 3.0f) alpha = (3.5f - osdTimer) / 0.5f;
+        alpha = Clamp(alpha, 0.0f, 1.0f);
+
+        const char *artist = Music_GetCurrentArtist();
+        const char *title = Music_GetCurrentTitle();
+        if (title && title[0] != '\0') {
+            const char *trackStr = TextFormat("AUDIO BUS // %s - %s", artist, title);
+            Vector2 tSz = UI_MeasureTextHud(trackStr, 11.0f);
+            int boxW = (int)tSz.x + 36;
+            int boxH = 24;
+            int boxX = 36;
+            int boxY = 48;
+
+            Color bgCol = (Color){ 6, 16, 28, (unsigned char)(210.0f * alpha) };
+            Color borderCol = (Color){ 68, 224, 195, (unsigned char)(180.0f * alpha) };
+            Color textCol = (Color){ 230, 245, 255, (unsigned char)(240.0f * alpha) };
+
+            Rectangle osdRec = { (float)boxX, (float)boxY, (float)boxW, (float)boxH };
+            DrawRectangleRounded(osdRec, 0.25f, 4, bgCol);
+            DrawRectangleRoundedLinesEx(osdRec, 0.25f, 4, 1.0f, borderCol);
+            UI_DrawTextHud(trackStr, (float)(boxX + 14), (float)(boxY + 5), 11.0f, textCol);
+        }
+    }
 
     // ========================================================================
     // 2. RETÍCULA CENTRAL Y DIRECTOR DE DERIVA (CENTRIFUGAL DRIFT & AIRBRAKES)

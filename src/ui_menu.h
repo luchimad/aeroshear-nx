@@ -21,6 +21,7 @@ typedef enum MenuAction {
     MENU_ACTION_OPEN_AIRCRAFT_SELECT,
     MENU_ACTION_OPEN_SETTINGS,
     MENU_ACTION_OPEN_CONTROLS,
+    MENU_ACTION_OPEN_RECORDS,
     MENU_ACTION_START_GAME,
     MENU_ACTION_RESUME_GAME,
     MENU_ACTION_RESTART_GAME,
@@ -32,9 +33,13 @@ typedef enum MenuAction {
 void Menu_Init(void);
 void Menu_SetSelectedBiome(BiomeType biome);
 
-// Menú Principal (ENGAGE_, OPTIONS_, CONTROLS_, EXIT_)
+// Menú Principal (ENGAGE_, RECORDS_, OPTIONS_, CONTROLS_, EXIT_)
 MenuAction Menu_UpdateMainMenu(void);
 void Menu_DrawMainMenu(int screenWidth, int screenHeight);
+
+// Pantalla de Récords / Hall of Fame (Top 5 Leaderboard)
+MenuAction Menu_UpdateRecords(BiomeType *selectedBiome);
+void Menu_DrawRecords(int screenWidth, int screenHeight, BiomeType selectedBiome);
 
 // Selección de Mapa (Delta Straits / Hot Sands)
 MenuAction Menu_UpdateMapSelect(BiomeType *selectedBiome);

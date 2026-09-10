@@ -5,6 +5,7 @@
 #include "ui_theme.h"
 #include "ui_core.h"
 #include "audio.h"
+#include "music.h"
 #include "records.h"
 #include "raymath.h"
 #include "rlgl.h"
@@ -33,6 +34,10 @@ void Race_Init(RaceTrack *race, BiomeType biome, Vector3 *startPlayerPos, float 
     race->cameraSnapRequested = false;
     race->currentBiome = biome;
     race->isNewRecord = false;
+    race->qualifyingRank = -1;
+    race->nameEntered = false;
+    strcpy(race->pilotTag, "AAA");
+    race->tagCursor = 0;
 
     const BiomeDefinition *bDef = Biome_Get(biome);
     snprintf(race->trackName, sizeof(race->trackName), "%s CIRCUIT", bDef->name);
@@ -149,15 +154,15 @@ static void Race_OnFinish(RaceTrack *race, const PlayerJet *player) {
     race->isFinished = true;
     race->finishTotalTime = race->raceTimer;
 
-    const char *rank = "RANK S [ACE AVIATOR]";
-    if (race->finishTotalTime > 120.0f) {
-        rank = "RANK B [QUALIFIED]";
-    } else if (race->finishTotalTime > 100.0f) {
-        rank = "RANK A [VETERAN]";
+    race->qualifyingRank = Records_CheckQualify(race->currentBiome, race->finishTotalTime);
+    race->isNewRecord = (race->qualifyingRank == 0);
+    if (race->qualifyingRank >= 0) {
+        race->nameEntered = false;
+        race->tagCursor = 0;
+        strcpy(race->pilotTag, "AAA");
+    } else {
+        race->nameEntered = true;
     }
-
-    float spd = player ? player->speedKmh : 0.0f;
-    race->isNewRecord = Records_Submit(race->currentBiome, race->finishTotalTime, spd, rank);
 }
 
 void Race_Update(RaceTrack *race, PlayerJet *player, float dt) {
@@ -173,17 +178,73 @@ void Race_Update(RaceTrack *race, PlayerJet *player, float dt) {
 
         if (newStage < prevStage && newStage > 0) {
             Audio_PlayCountdownStage(newStage); // Voice_three, Voice_two, Voice_one
+            Music_TriggerDucking(1.2f);
         }
 
         if (race->countdownTimer <= 0.0f) {
             race->isCountdown = false;
             race->isStarted = true;
             Audio_PlayCountdownStage(0); // Voice_go!
+            Music_TriggerDucking(1.2f);
         }
         return;
     }
 
-    if (race->isFinished) return;
+    if (race->isFinished) {
+        if (!race->nameEntered && race->qualifyingRank >= 0) {
+            int key = GetKeyPressed();
+            while (key > 0) {
+                if (key >= KEY_A && key <= KEY_Z) {
+                    race->pilotTag[race->tagCursor] = (char)('A' + (key - KEY_A));
+                    if (race->tagCursor < 2) race->tagCursor++;
+                }
+                key = GetKeyPressed();
+            }
+
+            if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W)) {
+                race->pilotTag[race->tagCursor]++;
+                if (race->pilotTag[race->tagCursor] > 'Z') race->pilotTag[race->tagCursor] = 'A';
+            }
+            if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S)) {
+                race->pilotTag[race->tagCursor]--;
+                if (race->pilotTag[race->tagCursor] < 'A') race->pilotTag[race->tagCursor] = 'Z';
+            }
+
+            if (IsGamepadAvailable(0)) {
+                if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_UP)) {
+                    race->pilotTag[race->tagCursor]++;
+                    if (race->pilotTag[race->tagCursor] > 'Z') race->pilotTag[race->tagCursor] = 'A';
+                }
+                if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_DOWN)) {
+                    race->pilotTag[race->tagCursor]--;
+                    if (race->pilotTag[race->tagCursor] < 'A') race->pilotTag[race->tagCursor] = 'Z';
+                }
+            }
+
+            if (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressed(KEY_LEFT)) {
+                if (race->tagCursor > 0) race->tagCursor--;
+            }
+
+            bool confirmChar = IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_RIGHT);
+            if (IsGamepadAvailable(0) && (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN) || IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_RIGHT))) {
+                confirmChar = true;
+            }
+
+            if (confirmChar) {
+                if (race->tagCursor < 2) {
+                    race->tagCursor++;
+                } else {
+                    const char *rank = "RANK S [ACE AVIATOR]";
+                    if (race->finishTotalTime > 120.0f) rank = "RANK B [QUALIFIED]";
+                    else if (race->finishTotalTime > 100.0f) rank = "RANK A [VETERAN]";
+                    float spd = player ? player->speedKmh : 0.0f;
+                    Records_InsertScore(race->currentBiome, race->qualifyingRank, race->pilotTag, race->finishTotalTime, spd, rank);
+                    race->nameEntered = true;
+                }
+            }
+        }
+        return;
+    }
 
     race->raceTimer += dt;
 
@@ -196,6 +257,7 @@ void Race_Update(RaceTrack *race, PlayerJet *player, float dt) {
     if (!race->halfwayAnnounced && race->currentCheckpoint == (race->totalCheckpoints / 2)) {
         race->halfwayAnnounced = true;
         Audio_PlayHalfway(); // Voice_halfway!
+        Music_TriggerDucking(1.5f);
     }
 
     // ========================================================================
@@ -536,13 +598,13 @@ void Race_DrawHUD(const RaceTrack *race, const PlayerJet *player, const Camera3D
     Vector2 gSz = UI_MeasureTextHud(gateStr, 13.0f);
     UI_DrawTextHud(gateStr, ((float)screenWidth - gSz.x) * 0.5f, (float)(topY + 26), 13.0f, colCyan);
 
-    const CircuitRecord *circuitRec = Records_Get(race->currentBiome);
-    if (circuitRec && circuitRec->hasRecord) {
-        int rSec = (int)circuitRec->bestTime;
+    const HighscoreEntry *circuitRec = Records_GetBest(race->currentBiome);
+    if (circuitRec && circuitRec->isValid) {
+        int rSec = (int)circuitRec->finishTime;
         int rMin = rSec / 60;
         int rS   = rSec % 60;
-        int rC   = (int)((circuitRec->bestTime - (float)rSec) * 100.0f);
-        const char *recStr = TextFormat("RECORD // %02d:%02d.%02d", rMin, rS, rC);
+        int rC   = (int)((circuitRec->finishTime - (float)rSec) * 100.0f);
+        const char *recStr = TextFormat("RECORD // %02d:%02d.%02d [%s]", rMin, rS, rC, circuitRec->pilotTag);
         Vector2 rSz = UI_MeasureTextHud(recStr, 10.0f);
         UI_DrawTextHud(recStr, ((float)screenWidth - rSz.x) * 0.5f, (float)(topY + 43), 10.0f, colAmber);
     }
@@ -627,23 +689,27 @@ void Race_DrawHUD(const RaceTrack *race, const PlayerJet *player, const Camera3D
         UI_DrawTextMenu("TOTAL FLIGHT DURATION:", (float)(cardX + 35), (float)(cardY + 66), 11.0f, UI_COLOR_MUTED_TEXT);
         UI_DrawTextHud(TextFormat("%02d:%02d.%02d", tMin, tS, tC), (float)(cardX + 35), (float)(cardY + 82), 26.0f, UI_COLOR_STEEL_WHITE);
 
-        const CircuitRecord *curRec = Records_Get(race->currentBiome);
-        if (curRec && curRec->hasRecord) {
-            int bSec = (int)curRec->bestTime;
+        const HighscoreEntry *curRec = Records_GetBest(race->currentBiome);
+        if (curRec && curRec->isValid) {
+            int bSec = (int)curRec->finishTime;
             int bMin = bSec / 60;
             int bS   = bSec % 60;
-            int bC   = (int)((curRec->bestTime - (float)bSec) * 100.0f);
-            UI_DrawTextMenu(TextFormat("CIRCUIT RECORD:         %02d:%02d.%02d [%s]", bMin, bS, bC, curRec->rank),
+            int bC   = (int)((curRec->finishTime - (float)bSec) * 100.0f);
+            UI_DrawTextMenu(TextFormat("CIRCUIT RECORD:         %02d:%02d.%02d [%s - %s]", bMin, bS, bC, curRec->pilotTag, curRec->rank),
                            (float)(cardX + 35), (float)(cardY + 116), 12.0f, UI_COLOR_AC4_AMBER);
         }
 
         if (race->isNewRecord) {
             float pulse = sinf((float)GetTime() * 8.0f) * 0.25f + 0.75f;
             Color goldCol = (Color){ 255, 205, 50, (unsigned char)(255 * pulse) };
-            UI_DrawTextTitle("* NEW CIRCUIT RECORD! *", (float)(cardX + 35), (float)(cardY + 138), 14.0f, goldCol);
+            UI_DrawTextTitle("* NEW ALL-TIME RECORD! *", (float)(cardX + 35), (float)(cardY + 138), 14.0f, goldCol);
+        } else if (race->qualifyingRank >= 0) {
+            float pulse = sinf((float)GetTime() * 8.0f) * 0.25f + 0.75f;
+            Color cyanCol = (Color){ 68, 224, 195, (unsigned char)(255 * pulse) };
+            UI_DrawTextTitle(TextFormat("* QUALIFIED FOR TOP 5 [#%02d] *", race->qualifyingRank + 1), (float)(cardX + 35), (float)(cardY + 138), 13.0f, cyanCol);
         }
 
-        int nextStatsY = race->isNewRecord ? 164 : 144;
+        int nextStatsY = (race->isNewRecord || race->qualifyingRank >= 0) ? 164 : 144;
         UI_DrawTextMenu(TextFormat("CHECKPOINTS CLEARED:    %02d / %02d", race->totalCheckpoints, race->totalCheckpoints), (float)(cardX + 35), (float)(cardY + nextStatsY), 13.0f, UI_COLOR_STEEL_WHITE);
         UI_DrawTextMenu(TextFormat("AIRSPEED REACHED:       %04d KTS (MACH %.2f)", (int)player->speedKnots, player->machNumber), (float)(cardX + 35), (float)(cardY + nextStatsY + 24), 13.0f, UI_COLOR_STEEL_WHITE);
 
@@ -654,7 +720,49 @@ void Race_DrawHUD(const RaceTrack *race, const PlayerJet *player, const Camera3D
 
         UI_DrawTextTitle(rank, (float)(cardX + 35), (float)(cardY + nextStatsY + 58), 15.0f, rankCol);
         DrawLine(cardX + 35, cardY + cardH - 50, cardX + cardW - 35, cardY + cardH - 50, (Color){ 35, 70, 95, 140 });
-        UI_DrawTextMenu("[ ESC ]: RETURN TO MENU      [ R / SPACE / (A) ]: RESTART", (float)(cardX + 35), (float)(cardY + cardH - 34), 12.0f, (Color){ 110, 155, 185, 200 });
+
+        // Caja de entrada de iniciales si clasificó en el Top 5
+        if (!race->nameEntered && race->qualifyingRank >= 0) {
+            int boxW = cardW - 70;
+            int boxH = 100;
+            int boxX = cardX + 35;
+            int boxY = cardY + cardH - 115;
+            Rectangle boxRec = { (float)boxX, (float)boxY, (float)boxW, (float)boxH };
+
+            DrawRectangleRounded(boxRec, 0.15f, 4, (Color){ 4, 12, 22, 245 });
+            DrawRectangleRoundedLinesEx(boxRec, 0.15f, 4, 1.2f, UI_COLOR_AC4_AMBER);
+
+            const char *topStr = TextFormat("HALL OF FAME ENTRY // POSITION #%02d", race->qualifyingRank + 1);
+            UI_DrawTextHud(topStr, (float)(boxX + 16), (float)(boxY + 12), 11.0f, UI_COLOR_AC4_AMBER);
+            UI_DrawTextHud("ENTER 3-LETTER PILOT TAG:", (float)(boxX + 16), (float)(boxY + 28), 10.0f, UI_COLOR_STEEL_WHITE);
+
+            int charStartX = boxX + boxW - 145;
+            int charY = boxY + 14;
+            for (int c = 0; c < 3; c++) {
+                Rectangle cRec = { (float)(charStartX + c * 38), (float)charY, 32.0f, 36.0f };
+                bool isCursor = (c == race->tagCursor);
+                Color bCol = isCursor ? UI_COLOR_AC4_CYAN : (Color){ 40, 75, 110, 160 };
+
+                DrawRectangleRounded(cRec, 0.2f, 4, isCursor ? (Color){ 16, 40, 70, 230 } : (Color){ 8, 20, 36, 180 });
+                DrawRectangleRoundedLinesEx(cRec, 0.2f, 4, isCursor ? 2.0f : 1.0f, bCol);
+
+                char letterStr[2] = { race->pilotTag[c], '\0' };
+                Vector2 lSz = UI_MeasureTextTitle(letterStr, 18.0f);
+                UI_DrawTextTitle(letterStr, cRec.x + (cRec.width - lSz.x) * 0.5f, cRec.y + (cRec.height - lSz.y) * 0.5f, 18.0f, UI_COLOR_STEEL_WHITE);
+
+                if (isCursor) {
+                    float blink = sinf((float)GetTime() * 8.0f) * 0.5f + 0.5f;
+                    if (blink > 0.3f) {
+                        DrawLine((int)cRec.x + 4, (int)(cRec.y + cRec.height - 4), (int)(cRec.x + cRec.width - 4), (int)(cRec.y + cRec.height - 4), UI_COLOR_AC4_CYAN);
+                    }
+                }
+            }
+
+            UI_DrawTextHud("[W/S / UP/DN]: LETTER    [ENTER / (A)]: CONFIRM CHAR    [A-Z]: DIRECT TYPE",
+                           (float)(boxX + 16), (float)(boxY + boxH - 22), 9.0f, (Color){ 110, 155, 185, 200 });
+        } else {
+            UI_DrawTextMenu("[ ESC ]: RETURN TO MENU      [ R / SPACE / (A) ]: RESTART", (float)(cardX + 35), (float)(cardY + cardH - 34), 12.0f, (Color){ 110, 155, 185, 200 });
+        }
     }
 }
 

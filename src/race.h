@@ -54,6 +54,10 @@ typedef struct RaceTrack {
     Vector3 spawnPosition;
     BiomeType currentBiome;
     bool isNewRecord;
+    int qualifyingRank;
+    bool nameEntered;
+    char pilotTag[4];
+    int tagCursor;
 
     Texture2D texPylon;
     Texture2D texRing;

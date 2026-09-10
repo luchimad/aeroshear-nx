@@ -19,7 +19,8 @@ typedef enum GameState {
     GAME_STATE_PLAYING         = 3,
     GAME_STATE_PAUSED          = 4,
     GAME_STATE_SETTINGS        = 5,
-    GAME_STATE_CONTROLS        = 6
+    GAME_STATE_CONTROLS        = 6,
+    GAME_STATE_RECORDS         = 7
 } GameState;
 
 typedef enum GameMode {
@@ -120,6 +121,7 @@ typedef struct GameSettings {
     bool blueFilterEnabled;     // Color grade azul cinematográfico
     HUDColorTheme hudTheme;     // Paleta del HUD
     float masterVolume;         // Volumen maestro
+    float musicVolume;          // Volumen de la música
     bool invertPitch;           // Invertir cabeceo (arriba = picar)
     bool fullscreen;            // Pantalla completa
 } GameSettings;

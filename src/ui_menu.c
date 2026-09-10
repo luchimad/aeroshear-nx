@@ -2,9 +2,11 @@
 #include "config.h"
 #include "biome.h"
 #include "audio.h"
+#include "music.h"
 #include "records.h"
 #include "raymath.h"
 #include <stdio.h>
+#include <string.h>
 #include <math.h>
 
 static int s_mainMenuSelection = 0;
@@ -24,10 +26,10 @@ void Menu_SetSelectedBiome(BiomeType biome) {
 }
 
 // ============================================================================
-// 1. MENÚ PRINCIPAL MINIMALISTA (ENGAGE_, OPTIONS_, ABOUT_, EXIT_)
+// 1. MENÚ PRINCIPAL MINIMALISTA (ENGAGE_, RECORDS_, OPTIONS_, CONTROLS_, EXIT_)
 // ============================================================================
 MenuAction Menu_UpdateMainMenu(void) {
-    const int totalOptions = 4;
+    const int totalOptions = 5;
 
     // Navegación Teclado
     if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W)) {
@@ -69,9 +71,9 @@ MenuAction Menu_UpdateMainMenu(void) {
     int screenH = GetScreenHeight();
     int leftX = (int)fmaxf(48.0f, (float)screenW * 0.085f);
     int btnW = 280;
-    int btnH = 44;
-    int startY = (int)((float)screenH * 0.44f);
-    int spacing = 56;
+    int btnH = 42;
+    int startY = (int)((float)screenH * 0.38f);
+    int spacing = 52;
 
     for (int i = 0; i < totalOptions; i++) {
         Rectangle btnRec = { (float)leftX, (float)(startY + i * spacing), (float)btnW, (float)btnH };
@@ -85,9 +87,10 @@ MenuAction Menu_UpdateMainMenu(void) {
 
     if (confirm) {
         if (s_mainMenuSelection == 0) return MENU_ACTION_OPEN_MAP_SELECT;
-        if (s_mainMenuSelection == 1) return MENU_ACTION_OPEN_SETTINGS;
-        if (s_mainMenuSelection == 2) return MENU_ACTION_OPEN_CONTROLS;
-        if (s_mainMenuSelection == 3) return MENU_ACTION_EXIT_APP;
+        if (s_mainMenuSelection == 1) return MENU_ACTION_OPEN_RECORDS;
+        if (s_mainMenuSelection == 2) return MENU_ACTION_OPEN_SETTINGS;
+        if (s_mainMenuSelection == 3) return MENU_ACTION_OPEN_CONTROLS;
+        if (s_mainMenuSelection == 4) return MENU_ACTION_EXIT_APP;
     }
 
     return MENU_ACTION_NONE;
@@ -111,29 +114,222 @@ void Menu_DrawMainMenu(int screenWidth, int screenHeight) {
     UI_DrawTopRegistrationBar(screenWidth, 44);
 
     int leftX = (int)fmaxf(48.0f, (float)screenWidth * 0.085f);
-    int titleY = (int)((float)screenHeight * 0.18f);
+    int titleY = (int)((float)screenHeight * 0.16f);
 
     // 3. Logo oficial en Neuropolitical y subtítulos con espaciado respirable
     UI_DrawTitleAeroshear(leftX, titleY, 1.0f, UI_COLOR_STEEL_WHITE);
     UI_DrawTextTitle("FLIGHT CORE // PUBLIC ALPHA EDITION", (float)leftX, (float)(titleY + 56), 15.0f, UI_COLOR_AC4_CYAN);
     UI_DrawTextHud("STANDALONE BUILD v0.1.0 // 60 FPS DETERMINISTIC CORE", (float)leftX, (float)(titleY + 80), 11.0f, UI_COLOR_MUTED_TEXT);
 
-    DrawLine(leftX, titleY + 104, leftX + 440, titleY + 104, (Color){ 45, 95, 145, 140 });
+    DrawLine(leftX, titleY + 102, leftX + 440, titleY + 102, (Color){ 45, 95, 145, 140 });
 
-    const char *options[4] = { "ENGAGE_", "OPTIONS_", "CONTROLS_", "EXIT_" };
+    const char *options[5] = { "ENGAGE_", "RECORDS_", "OPTIONS_", "CONTROLS_", "EXIT_" };
 
-    int startY = (int)((float)screenHeight * 0.44f);
-    int spacing = 58;
+    int startY = (int)((float)screenHeight * 0.38f);
+    int spacing = 52;
     int btnW = (int)fminf(320.0f, (float)screenWidth * 0.35f);
-    int btnH = 46;
+    int btnH = 42;
 
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         Rectangle btnRec = { (float)leftX, (float)(startY + i * spacing), (float)btnW, (float)btnH };
         bool isSelected = (i == s_mainMenuSelection);
         UI_DrawMenuButton(btnRec, options[i], isSelected, mousePos);
     }
 
     UI_DrawNavHelp(screenWidth, screenHeight, "[W/S / UP/DN / D-PAD]: NAVIGATE    [ENTER / SPACE / (A)]: SELECT    [F11 / ALT+ENTER]: FULLSCREEN");
+}
+
+// ============================================================================
+// 1.1. SALÓN DE LA FAMA & RÉCORDS LOCALES (HALL OF FAME TOP 5)
+// ============================================================================
+MenuAction Menu_UpdateRecords(BiomeType *selectedBiome) {
+    if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_BACKSPACE)) return MENU_ACTION_TO_MAIN_MENU;
+    if (IsGamepadAvailable(0) && IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) {
+        return MENU_ACTION_TO_MAIN_MENU;
+    }
+
+    // Conmutar circuito (Delta Straits <-> Hot Sands)
+    bool switchCircuit = false;
+    if (IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_A) || IsKeyPressed(KEY_D) || IsKeyPressed(KEY_TAB)) {
+        switchCircuit = true;
+    }
+    if (IsGamepadAvailable(0)) {
+        if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_LEFT) || IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) ||
+            IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_TRIGGER_1) || IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_TRIGGER_1)) {
+            switchCircuit = true;
+        }
+    }
+
+    if (switchCircuit && selectedBiome) {
+        *selectedBiome = (*selectedBiome == BIOME_DELTASTRAITS) ? BIOME_HOTSANDS : BIOME_DELTASTRAITS;
+    }
+
+    // Clics con ratón en las pestañas o botón volver
+    Vector2 mousePos = GetMousePosition();
+    int screenW = GetScreenWidth();
+    int screenH = GetScreenHeight();
+    int leftX = (int)fmaxf(48.0f, (float)screenW * 0.085f);
+    int topY = (int)((float)screenH * 0.16f);
+    int tabY = topY + 56;
+    int tabW = 230;
+    int tabH = 38;
+
+    Rectangle tab0 = { (float)leftX, (float)tabY, (float)tabW, (float)tabH };
+    Rectangle tab1 = { (float)(leftX + tabW + 14), (float)tabY, (float)tabW, (float)tabH };
+    int retW = 160;
+    Rectangle retRec = { (float)(screenW - leftX - retW), (float)tabY, (float)retW, (float)tabH };
+
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        if (CheckCollisionPointRec(mousePos, tab0) && selectedBiome) {
+            *selectedBiome = BIOME_DELTASTRAITS;
+        } else if (CheckCollisionPointRec(mousePos, tab1) && selectedBiome) {
+            *selectedBiome = BIOME_HOTSANDS;
+        } else if (CheckCollisionPointRec(mousePos, retRec)) {
+            return MENU_ACTION_TO_MAIN_MENU;
+        }
+    }
+
+    return MENU_ACTION_NONE;
+}
+
+void Menu_DrawRecords(int screenWidth, int screenHeight, BiomeType selectedBiome) {
+    float time = (float)GetTime();
+    Vector2 mousePos = GetMousePosition();
+    Vector2 targetParallax = {
+        ((mousePos.x / (float)screenWidth) - 0.5f) * 2.0f,
+        ((mousePos.y / (float)screenHeight) - 0.5f) * 2.0f
+    };
+    const BiomeDefinition *bDef = Biome_Get(selectedBiome);
+    Color accent = bDef ? bDef->themeAccentColor : UI_COLOR_AC4_CYAN;
+
+    // 1. Fondo reactivo orbital con tinte dinámico de bioma
+    UI_DrawOrbitalLimbEx(screenWidth, screenHeight, time, targetParallax, accent);
+
+    // 2. Cabecera táctica unificada
+    UI_DrawScreenHeader(screenWidth, "CIRCUIT RECORDS // HALL OF FAME", "VERIFIED LOCAL FLIGHT TIME TRIALS [TOP 5]", "CLASSIFIED ARCHIVE // REC.01");
+
+    int leftX = (int)fmaxf(48.0f, (float)screenWidth * 0.085f);
+    int topY = (int)((float)screenHeight * 0.16f);
+    int tabY = topY + 56;
+    int tabW = 230;
+    int tabH = 38;
+
+    // 3. Pestañas de circuitos (Tabs)
+    const char *circuitNames[2] = { "01 // DELTA STRAITS", "02 // HOT SANDS" };
+    for (int i = 0; i < 2; i++) {
+        Rectangle tRec = { (float)(leftX + i * (tabW + 14)), (float)tabY, (float)tabW, (float)tabH };
+        bool isCurrent = (i == (int)selectedBiome);
+        const BiomeDefinition *tabBDef = Biome_Get((BiomeType)i);
+        Color tabCol = tabBDef ? tabBDef->themeAccentColor : UI_COLOR_AC4_CYAN;
+
+        if (isCurrent) {
+            DrawRectangleRounded(tRec, 0.25f, 4, (Color){ 12, 28, 48, 230 });
+            DrawRectangleRoundedLinesEx(tRec, 0.25f, 4, 1.2f, tabCol);
+            DrawRectangleGradientH((int)tRec.x + 2, (int)tRec.y + 2, (int)(tRec.width * 0.7f), (int)tRec.height - 4,
+                                   (Color){ tabCol.r, tabCol.g, tabCol.b, 60 }, (Color){ tabCol.r, tabCol.g, tabCol.b, 0 });
+            UI_DrawTextMenu(circuitNames[i], tRec.x + 18, tRec.y + 10, 13.0f, UI_COLOR_STEEL_WHITE);
+        } else {
+            DrawRectangleRounded(tRec, 0.25f, 4, (Color){ 4, 10, 20, 160 });
+            DrawRectangleRoundedLinesEx(tRec, 0.25f, 4, 1.0f, (Color){ 35, 65, 95, 120 });
+            UI_DrawTextMenu(circuitNames[i], tRec.x + 18, tRec.y + 10, 13.0f, UI_COLOR_MUTED_TEXT);
+        }
+    }
+
+    // Botón interactivo de retorno
+    int retW = 160;
+    Rectangle retRec = { (float)(screenWidth - leftX - retW), (float)tabY, (float)retW, (float)tabH };
+    bool isRetHover = CheckCollisionPointRec(mousePos, retRec);
+    DrawRectangleRounded(retRec, 0.25f, 4, isRetHover ? (Color){ 20, 42, 68, 220 } : (Color){ 4, 10, 20, 160 });
+    DrawRectangleRoundedLinesEx(retRec, 0.25f, 4, 1.0f, isRetHover ? UI_COLOR_AC4_CYAN : (Color){ 35, 65, 95, 120 });
+    UI_DrawTextMenu("< RETURN", retRec.x + 26, retRec.y + 10, 12.0f, isRetHover ? UI_COLOR_STEEL_WHITE : UI_COLOR_MUTED_TEXT);
+
+    // 4. Panel de Leaderboard Top 5 en Glass Panel
+    int panelY = tabY + tabH + 16;
+    int panelW = screenWidth - leftX * 2;
+    int panelH = (int)fminf(380.0f, (float)screenHeight - panelY - 70.0f);
+    Rectangle pRec = { (float)leftX, (float)panelY, (float)panelW, (float)panelH };
+
+    UI_DrawGlassPanel(pRec, "TOP 5 TELEMETRY ARCHIVE // ASNX-V2 ENCRYPTED RECORD", accent, UI_COLOR_PANEL_BG);
+
+    // Cabecera de columnas de la tabla
+    int colPos   = leftX + 32;
+    int colTag   = leftX + 110;
+    int colTime  = leftX + 230;
+    int colSpeed = leftX + (int)(panelW * 0.44f);
+    int colRank  = leftX + (int)(panelW * 0.64f);
+    int headerY  = panelY + 36;
+
+    UI_DrawTextHud("POS",       (float)colPos,   (float)headerY, 11.0f, UI_COLOR_AC4_CYAN);
+    UI_DrawTextHud("PILOT",     (float)colTag,   (float)headerY, 11.0f, UI_COLOR_AC4_CYAN);
+    UI_DrawTextHud("CHRONO",    (float)colTime,  (float)headerY, 11.0f, UI_COLOR_AC4_CYAN);
+    UI_DrawTextHud("PEAK VELOCITY", (float)colSpeed, (float)headerY, 11.0f, UI_COLOR_AC4_CYAN);
+    UI_DrawTextHud("CLASSIFICATION / STATUS", (float)colRank,  (float)headerY, 11.0f, UI_COLOR_AC4_CYAN);
+
+    DrawLine(leftX + 20, headerY + 18, leftX + panelW - 20, headerY + 18, (Color){ 45, 95, 145, 150 });
+
+    const CircuitLeaderboard *board = Records_GetLeaderboard(selectedBiome);
+    int rowStartY = headerY + 28;
+    int rowSpacing = (panelH - 100) / 5;
+    if (rowSpacing < 36) rowSpacing = 36;
+
+    for (int i = 0; i < TOP_SCORES_COUNT; i++) {
+        int rY = rowStartY + i * rowSpacing;
+        const HighscoreEntry *e = &board->entries[i];
+
+        // Barra de fondo alternada para cada fila
+        if (i % 2 == 1) {
+            DrawRectangle(leftX + 16, rY - 4, panelW - 32, rowSpacing - 4, (Color){ 12, 26, 44, 75 });
+        }
+
+        // Color según posición en podio
+        Color rankCol = UI_COLOR_STEEL_WHITE;
+        if (i == 0) rankCol = (Color){ 255, 215, 60, 255 };      // Oro / 1st place
+        else if (i == 1) rankCol = (Color){ 215, 230, 245, 240 }; // Plata
+        else if (i == 2) rankCol = (Color){ 220, 160, 100, 230 }; // Bronce
+        else rankCol = UI_COLOR_MUTED_TEXT;
+
+        // POS
+        const char *posStr = TextFormat("#0%d", i + 1);
+        UI_DrawTextTitle(posStr, (float)colPos, (float)rY, 14.0f, rankCol);
+
+        // PILOT TAG
+        if (e->isValid) {
+            UI_DrawTextTitle(TextFormat("[%s]", e->pilotTag), (float)colTag, (float)rY, 14.0f, (i == 0) ? (Color){ 255, 225, 100, 255 } : UI_COLOR_STEEL_WHITE);
+        } else {
+            UI_DrawTextTitle("[---]", (float)colTag, (float)rY, 14.0f, UI_COLOR_MUTED_TEXT);
+        }
+
+        // TIME (CHRONO)
+        if (e->isValid && e->finishTime > 0.0f) {
+            int mins = (int)(e->finishTime / 60.0f);
+            float secs = fmodf(e->finishTime, 60.0f);
+            UI_DrawTextMenu(TextFormat("%02d:%05.2f", mins, secs), (float)colTime, (float)(rY + 1), 14.0f, (i == 0) ? UI_COLOR_AC4_CYAN : UI_COLOR_STEEL_WHITE);
+        } else {
+            UI_DrawTextMenu("--:--.--", (float)colTime, (float)(rY + 1), 14.0f, UI_COLOR_MUTED_TEXT);
+        }
+
+        // PEAK SPEED
+        if (e->isValid && e->maxSpeedKmh > 0.0f) {
+            UI_DrawTextHud(TextFormat("%.0f KM/H", e->maxSpeedKmh), (float)colSpeed, (float)(rY + 3), 11.0f, UI_COLOR_AC4_GREEN);
+        } else {
+            UI_DrawTextHud("--- KM/H", (float)colSpeed, (float)(rY + 3), 11.0f, UI_COLOR_MUTED_TEXT);
+        }
+
+        // RANK / ACCREDITATION
+        if (e->isValid && strlen(e->rank) > 0) {
+            UI_DrawTextHud(e->rank, (float)colRank, (float)(rY + 3), 11.0f, (i == 0) ? UI_COLOR_AC4_CYAN : UI_COLOR_STEEL_WHITE);
+        } else {
+            UI_DrawTextHud("STANDBY", (float)colRank, (float)(rY + 3), 11.0f, UI_COLOR_MUTED_TEXT);
+        }
+    }
+
+    // Pie de panel técnico
+    int footY = panelY + panelH - 24;
+    DrawLine(leftX + 20, footY - 6, leftX + panelW - 20, footY - 6, (Color){ 35, 75, 115, 120 });
+    UI_DrawTextHud("STORAGE BUS // records.dat [V2-ASNX] // HALL OF FAME FLIGHT DATABASE", (float)(leftX + 24), (float)footY, 10.0f, UI_COLOR_MUTED_TEXT);
+
+    // Ayuda de navegación
+    UI_DrawNavHelp(screenWidth, screenHeight, "[A/D / LEFT/RIGHT / TAB]: SWITCH CIRCUIT    [ESC / (B)]: RETURN TO MAIN MENU");
 }
 
 // ============================================================================
@@ -266,15 +462,13 @@ void Menu_DrawMapSelect(int screenWidth, int screenHeight, BiomeType selectedBio
                    (float)(cardX + 22), (float)(cardY + 156), 11.0f, textPrimary);
     UI_DrawTextMenu("CIRCUIT: 18 CHECKPOINTS [CROSS RAID]", (float)(cardX + 22), (float)(cardY + 176), 11.0f, UI_COLOR_AC4_GREEN);
 
-    const CircuitRecord *rec = Records_Get(selectedBiome);
-    if (rec && rec->hasRecord) {
-        int rSec = (int)rec->bestTime;
-        int rMin = rSec / 60;
-        int rS   = rSec % 60;
-        int rC   = (int)((rec->bestTime - (float)rSec) * 100.0f);
-        UI_DrawTextMenu(TextFormat("CIRCUIT RECORD: %02d:%02d.%02d [%s]",
-                                   rMin, rS, rC, rec->rank),
-                       (float)(cardX + 22), (float)(cardY + 200), 11.0f, UI_COLOR_AC4_AMBER);
+    const HighscoreEntry *best = Records_GetBest(selectedBiome);
+    if (best && best->isValid && best->finishTime > 0.0f) {
+        int mins = (int)(best->finishTime / 60.0f);
+        float secs = fmodf(best->finishTime, 60.0f);
+        UI_DrawTextMenu(TextFormat("CIRCUIT RECORD: %02d:%05.2f [%s] %s",
+                                   mins, secs, best->pilotTag, best->rank),
+                        (float)(cardX + 22), (float)(cardY + 200), 11.0f, UI_COLOR_AC4_AMBER);
     } else {
         UI_DrawTextMenu("CIRCUIT RECORD: NO SORTIE LOGGED", (float)(cardX + 22), (float)(cardY + 200), 11.0f, UI_COLOR_MUTED_TEXT);
     }
@@ -383,10 +577,10 @@ void Menu_DrawAircraftSelect(int screenWidth, int screenHeight, int selectedAirc
 }
 
 // ============================================================================
-// 4. MENÚ DE OPCIONES (FULLSCREEN, INVERT PITCH, CRT, AUDIO)
+// 4. MENÚ DE OPCIONES (FULLSCREEN, INVERT PITCH, CRT, AUDIO, MUSIC)
 // ============================================================================
 MenuAction Menu_UpdateSettings(GameSettings *settings) {
-    const int totalOpts = 8;
+    const int totalOpts = 9;
 
     if (IsKeyPressed(KEY_ESCAPE)) return MENU_ACTION_TO_MAIN_MENU;
     if (IsGamepadAvailable(0) && IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) {
@@ -407,6 +601,27 @@ MenuAction Menu_UpdateSettings(GameSettings *settings) {
 
     bool toggle = IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_RIGHT);
     if (IsGamepadAvailable(0) && IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) toggle = true;
+
+    // Soporte para clics con el ratón
+    Vector2 mousePos = GetMousePosition();
+    int screenW = GetScreenWidth();
+    int screenH = GetScreenHeight();
+    int leftX = (int)fmaxf(48.0f, (float)screenW * 0.085f);
+    int topY = (int)((float)screenH * 0.16f);
+    int startY = topY + 54;
+    int spacing = 38;
+    int btnW = (int)fminf(600.0f, (float)screenW * 0.62f);
+    int rowH = 34;
+
+    for (int i = 0; i < totalOpts; i++) {
+        Rectangle r = { (float)leftX, (float)(startY + i * spacing), (float)btnW, (float)rowH };
+        if (CheckCollisionPointRec(mousePos, r)) {
+            s_settingsSelection = i;
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                toggle = true;
+            }
+        }
+    }
 
     if (toggle) {
         if (s_settingsSelection == 0) {
@@ -430,6 +645,10 @@ MenuAction Menu_UpdateSettings(GameSettings *settings) {
             if (settings->masterVolume > 1.05f) settings->masterVolume = 0.0f;
             Audio_SetMasterVolume(settings->masterVolume);
         } else if (s_settingsSelection == 7) {
+            settings->musicVolume += 0.20f;
+            if (settings->musicVolume > 1.05f) settings->musicVolume = 0.0f;
+            Music_SetVolume(settings->musicVolume);
+        } else if (s_settingsSelection == 8) {
             return MENU_ACTION_TO_MAIN_MENU;
         }
     }
@@ -448,18 +667,19 @@ void Menu_DrawSettings(int screenWidth, int screenHeight, const GameSettings *se
     int leftX = (int)fmaxf(48.0f, (float)screenWidth * 0.085f);
     int topY = (int)((float)screenHeight * 0.16f);
 
-    const char *labels[8] = {
+    const char *labels[9] = {
         "DISPLAY MODE",
         "PITCH CONTROL AXIS",
         "CRT SCANLINES SHADER",
         "APERTURE PHOSPHOR MASK",
         "CINEMATIC BLUE GRADE",
         "HUD PALETTE THEME",
-        "MASTER AUDIO VOLUME",
+        "MASTER SFX VOLUME",
+        "MUSIC STREAM VOLUME",
         "RETURN TO MAIN MENU"
     };
 
-    const char *values[8];
+    const char *values[9];
     values[0] = IsWindowFullscreen() ? "FULLSCREEN" : "WINDOWED";
     values[1] = settings->invertPitch ? "INVERTED" : "NORMAL [W=CLIMB]";
     values[2] = settings->scanlinesEnabled ? "ON" : "OFF";
@@ -469,14 +689,17 @@ void Menu_DrawSettings(int screenWidth, int screenHeight, const GameSettings *se
     char volBuffer[32];
     snprintf(volBuffer, sizeof(volBuffer), "%.0f%%", settings->masterVolume * 100.0f);
     values[6] = volBuffer;
-    values[7] = "[ESC / (B)]";
+    char musVolBuffer[32];
+    snprintf(musVolBuffer, sizeof(musVolBuffer), "%.0f%%", settings->musicVolume * 100.0f);
+    values[7] = musVolBuffer;
+    values[8] = "[ESC / (B)]";
 
-    int startY = topY + 65;
-    int spacing = 44;
+    int startY = topY + 54;
+    int spacing = 38;
     int btnW = (int)fminf(600.0f, (float)screenWidth * 0.62f);
-    int rowH = 38;
+    int rowH = 34;
 
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 9; i++) {
         bool isSel = (i == s_settingsSelection);
         Rectangle r = { (float)leftX, (float)(startY + i * spacing), (float)btnW, (float)rowH };
         UI_DrawMinimalOptionRow(r, labels[i], values[i], isSel, mousePos);

@@ -16,6 +16,7 @@
 #include "ui_menu.h"
 #include "fx.h"
 #include "audio.h"
+#include "music.h"
 #include "records.h"
 #include <stddef.h>
 #include <math.h>
@@ -72,6 +73,7 @@ int main(int argc, char *argv[]) {
 
     // 2. Inicialización de Subsistemas
     Audio_Init();
+    Music_Init();
     FX_Init();
     UITheme_Init();
     Menu_Init();
@@ -91,11 +93,14 @@ int main(int argc, char *argv[]) {
         .blueFilterEnabled = true,
         .hudTheme = HUD_THEME_CYAN,
         .masterVolume = 1.0f,
+        .musicVolume = 0.80f,
         .invertPitch = false,
         .fullscreen = false
     };
     Terrain_SetRenderDistance(&terrain, gameSettings.renderDistance);
     Audio_SetMasterVolume(gameSettings.masterVolume);
+    Music_SetVolume(gameSettings.musicVolume);
+    Music_PlayMenu();
     UITheme_SetHUDTheme(gameSettings.hudTheme);
 
     int initialW = GetScreenWidth();
@@ -128,6 +133,8 @@ int main(int argc, char *argv[]) {
     while (!WindowShouldClose()) {
         float dt = GetFrameTime();
         if (dt > 0.05f) dt = 0.05f;
+
+        Music_Update(dt);
 
         int curWidth = GetScreenWidth();
         int curHeight = GetScreenHeight();
@@ -162,10 +169,14 @@ int main(int argc, char *argv[]) {
             }
             if (captureFrame == 25) {
                 TakeScreenshot("alpha_main_menu.png");
-                gameState = GAME_STATE_CONTROLS;
+                gameState = GAME_STATE_RECORDS;
             }
             if (captureFrame == 50) {
-                TakeScreenshot("alpha_controls.png");
+                TakeScreenshot("alpha_records.png");
+                gameState = GAME_STATE_SETTINGS;
+            }
+            if (captureFrame == 75) {
+                TakeScreenshot("alpha_settings.png");
                 break;
             }
         }
@@ -187,6 +198,8 @@ int main(int argc, char *argv[]) {
             MenuAction action = Menu_UpdateMainMenu();
             if (action == MENU_ACTION_OPEN_MAP_SELECT) {
                 gameState = GAME_STATE_MAP_SELECT;
+            } else if (action == MENU_ACTION_OPEN_RECORDS) {
+                gameState = GAME_STATE_RECORDS;
             } else if (action == MENU_ACTION_OPEN_SETTINGS) {
                 gameState = GAME_STATE_SETTINGS;
             } else if (action == MENU_ACTION_OPEN_CONTROLS) {
@@ -198,6 +211,24 @@ int main(int argc, char *argv[]) {
             BeginTextureMode(sceneTarget);
                 ClearBackground(BLACK);
                 Menu_DrawMainMenu(curWidth, curHeight);
+            EndTextureMode();
+
+            float menuPhosphor = gameSettings.pixelFilterEnabled ? 0.65f : 0.25f;
+            PresentScreenWithCRT(sceneTarget, scanlineShader, locScanAlpha, locScanDistort, locScanPhosphor, locScanBlue,
+                                 0.045f, 0.0f, menuPhosphor, 0.0f, gameSettings.scanlinesEnabled, curWidth, curHeight, crtPowerOnTimer);
+        }
+        // ==========================================
+        // ESTADO 1.1: SALÓN DE LA FAMA (RECORDS_)
+        // ==========================================
+        else if (gameState == GAME_STATE_RECORDS) {
+            MenuAction action = Menu_UpdateRecords(&selectedBiome);
+            if (action == MENU_ACTION_TO_MAIN_MENU) {
+                gameState = GAME_STATE_MAIN_MENU;
+            }
+
+            BeginTextureMode(sceneTarget);
+                ClearBackground(BLACK);
+                Menu_DrawRecords(curWidth, curHeight, selectedBiome);
             EndTextureMode();
 
             float menuPhosphor = gameSettings.pixelFilterEnabled ? 0.65f : 0.25f;
@@ -249,6 +280,7 @@ int main(int argc, char *argv[]) {
                 player.velocity = Vector3Scale(player.forward, player.forwardSpeed);
                 FlightCamera_Init(&flightCamera, player.position, player.forward);
                 FX_Init();
+                Music_StartBiome(selectedBiome);
                 gameState = GAME_STATE_PLAYING;
             } else if (action == MENU_ACTION_TO_MAP_SELECT) {
                 gameState = GAME_STATE_MAP_SELECT;
@@ -305,27 +337,31 @@ int main(int argc, char *argv[]) {
         // ESTADO 6: VUELO ACTIVO (PLAYING)
         // ==========================================
         else if (gameState == GAME_STATE_PLAYING) {
-            // Reinicio tras finalizar carrera
+            // Reinicio tras finalizar carrera (solo si no se están ingresando iniciales)
             if (race.isFinished) {
-                bool wantRestart = IsKeyPressed(KEY_R) || IsKeyPressed(KEY_SPACE);
-                if (IsGamepadAvailable(0) && IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) wantRestart = true;
+                if (race.nameEntered || race.qualifyingRank < 0) {
+                    bool wantRestart = IsKeyPressed(KEY_R) || IsKeyPressed(KEY_SPACE);
+                    if (IsGamepadAvailable(0) && IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) wantRestart = true;
 
-                if (wantRestart) {
-                    Vector3 startPos = { 0 };
-                    float startYaw = 0.0f;
-                    Race_Init(&race, selectedBiome, &startPos, &startYaw);
+                    if (wantRestart) {
+                        Vector3 startPos = { 0 };
+                        float startYaw = 0.0f;
+                        Race_Init(&race, selectedBiome, &startPos, &startYaw);
 
-                    Player_Init(&player);
-                    const AircraftDefinition *jet = Aircraft_Get(selectedAircraftIdx);
-                    Player_ApplyAircraft(&player, jet);
-                    player.position = startPos;
-                    player.heading = startYaw;
-                    player.forward = (Vector3){ -sinf(startYaw), 0.0f, cosf(startYaw) };
-                    player.velocity = Vector3Scale(player.forward, player.forwardSpeed);
-                    FlightCamera_Init(&flightCamera, player.position, player.forward);
-                    FX_Init();
-                } else if (IsKeyPressed(KEY_ESCAPE)) {
-                    gameState = GAME_STATE_MAIN_MENU;
+                        Player_Init(&player);
+                        const AircraftDefinition *jet = Aircraft_Get(selectedAircraftIdx);
+                        Player_ApplyAircraft(&player, jet);
+                        player.position = startPos;
+                        player.heading = startYaw;
+                        player.forward = (Vector3){ -sinf(startYaw), 0.0f, cosf(startYaw) };
+                        player.velocity = Vector3Scale(player.forward, player.forwardSpeed);
+                        FlightCamera_Init(&flightCamera, player.position, player.forward);
+                        FX_Init();
+                        Music_StartBiome(selectedBiome);
+                    } else if (IsKeyPressed(KEY_ESCAPE)) {
+                        gameState = GAME_STATE_MAIN_MENU;
+                        Music_PlayMenu();
+                    }
                 }
             } else {
                 bool wantPause = IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_P);
@@ -417,9 +453,11 @@ int main(int argc, char *argv[]) {
                 player.velocity = Vector3Scale(player.forward, player.forwardSpeed);
                 FlightCamera_Init(&flightCamera, player.position, player.forward);
                 FX_Init();
+                Music_StartBiome(selectedBiome);
                 gameState = GAME_STATE_PLAYING;
             } else if (action == MENU_ACTION_TO_MAIN_MENU) {
                 gameState = GAME_STATE_MAIN_MENU;
+                Music_PlayMenu();
             } else if (action == MENU_ACTION_EXIT_APP) {
                 break;
             }
@@ -439,6 +477,7 @@ int main(int argc, char *argv[]) {
     UnloadRenderTexture(sceneTarget);
     UnloadShader(scanlineShader);
     FX_Unload();
+    Music_Unload();
     Audio_Unload();
     Race_Unload(&race);
     Scenery_Unload(&scenery);

@@ -28,6 +28,7 @@ gcc -O2 -Wall -std=c99 -I include -I src ^
     src\fx.c ^
     src\audio.c ^
     src\records.c ^
+    src\music.c ^
     -o game.exe ^
     -L lib -lraylib -lopengl32 -lgdi32 -lwinmm -Wl,--defsym=stat64i32=_stat -Wl,--stack,16777216
 
