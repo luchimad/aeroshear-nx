@@ -139,12 +139,14 @@ static void GenerateChunkProps(SceneryChunk *chunk, int chunkX, int chunkZ, cons
 
                 if (isTall) {
                     baseHeight = 110.0f + SceneryRandom(&rng) * 70.0f; // 110m a 180m de altura
-                    baseWidth = baseHeight * 0.48f;
                     texIdx = (SceneryRandom(&rng) > 0.5f) ? 5 : 4; // building_tall_1 o 2
+                    float texAspect = (texIdx == 4) ? (295.0f / 505.0f) : (262.0f / 512.0f);
+                    baseWidth = baseHeight * texAspect;
                 } else {
                     baseHeight = 48.0f + SceneryRandom(&rng) * 32.0f;  // 48m a 80m de altura
-                    baseWidth = baseHeight * 0.82f;
                     texIdx = (SceneryRandom(&rng) > 0.5f) ? 3 : 2; // building_small_1 o 2
+                    float texAspect = (texIdx == 2) ? 1.0f : (350.0f / 340.0f);
+                    baseWidth = baseHeight * texAspect;
                 }
 
                 BillboardProp *prop = &chunk->props[chunk->propCount++];
@@ -154,7 +156,8 @@ static void GenerateChunkProps(SceneryChunk *chunk, int chunkX, int chunkZ, cons
                 prop->position = (Vector3){ worldX, groundY + baseHeight * 0.5f, worldZ };
                 prop->randomRotation = SceneryRandom(&rng) * 360.0f;
                 prop->category = PROP_CATEGORY_BUILDING;
-                prop->collisionRadius = baseWidth * 0.21f; // Hitbox ajustada al fuste central del edificio
+                // Semi-ancho frontal sólido del edificio (76% del ancho visible del sprite)
+                prop->collisionRadius = baseWidth * 0.38f;
             } else {
                 // Arbustos dispersos en las dunas
                 float desertCluster = sinf(worldX * 0.0025f) * cosf(worldZ * 0.0025f);
@@ -456,24 +459,32 @@ void Scenery_Draw(const ScenerySystem *scenery, const Camera3D *camera) {
 
 // ============================================================================
 // DETECCIÓN DE COLISIONES DE PROPS (ÁRBOLES Y EDIFICIOS)
+// SISTEMA CONTINUO (SWEPT-SEGMENT CCD) + HITBOX ORIENTADA A BILLBOARD
 // ============================================================================
 
 bool Scenery_CheckCollisions(const ScenerySystem *scenery, PlayerJet *player, float dt) {
     (void)dt;
     if (player->isDead) return true;
 
-    // Sincronización 1:1 de la hitbox con la posición 3D real de la nave en el mundo
-    Vector3 hitboxPos = player->position;
+    Vector3 pPrev = player->prevPosition;
+    Vector3 pCurr = player->position;
 
-    int centerChunkX = (int)roundf(hitboxPos.x / TERRAIN_CHUNK_SIZE);
-    int centerChunkZ = (int)roundf(hitboxPos.z / TERRAIN_CHUNK_SIZE);
+    // Envolvente de chunks que cubre todo el segmento de vuelo entre t-1 y t
+    int minChunkX = (int)roundf(fminf(pPrev.x, pCurr.x) / TERRAIN_CHUNK_SIZE) - 1;
+    int maxChunkX = (int)roundf(fmaxf(pPrev.x, pCurr.x) / TERRAIN_CHUNK_SIZE) + 1;
+    int minChunkZ = (int)roundf(fminf(pPrev.z, pCurr.z) / TERRAIN_CHUNK_SIZE) - 1;
+    int maxChunkZ = (int)roundf(fmaxf(pPrev.z, pCurr.z) / TERRAIN_CHUNK_SIZE) + 1;
+
+    const float shipRadius = 3.2f;
+    const float shipHalfH  = 2.6f;
 
     for (int c = 0; c < TERRAIN_CHUNK_GRID * TERRAIN_CHUNK_GRID; c++) {
         const SceneryChunk *chunk = &scenery->chunks[c];
         if (!chunk->isLoaded) continue;
 
-        // Comprobar sólo los 9 chunks inmediatamente adyacentes a la posición real de la hitbox
-        if (abs(chunk->chunkX - centerChunkX) > 1 || abs(chunk->chunkZ - centerChunkZ) > 1) {
+        // Comprobar únicamente chunks dentro del corredor de paso del caza
+        if (chunk->chunkX < minChunkX || chunk->chunkX > maxChunkX ||
+            chunk->chunkZ < minChunkZ || chunk->chunkZ > maxChunkZ) {
             continue;
         }
 
@@ -488,49 +499,154 @@ bool Scenery_CheckCollisions(const ScenerySystem *scenery, PlayerJet *player, fl
                 continue;
             }
 
-            float dx = hitboxPos.x - prop->position.x;
-            float dz = hitboxPos.z - prop->position.z;
-            float shipRadius = 3.5f;
-            float maxDist = prop->collisionRadius + shipRadius;
+            // Comprobación vertical rápida de envolvente
+            float propBottom = prop->position.y - prop->height * 0.5f;
+            float propTop    = prop->position.y + prop->height * 0.5f;
+            float pathMinY   = fminf(pPrev.y, pCurr.y) - shipHalfH;
+            float pathMaxY   = fmaxf(pPrev.y, pCurr.y) + shipHalfH;
 
-            if (fabsf(dx) > maxDist || fabsf(dz) > maxDist) continue;
-            float distSq = dx * dx + dz * dz;
-            if (distSq > maxDist * maxDist) continue;
-
-            // Comprobación de altura vertical (Y)
-            float playerHalfH  = 2.8f;
-            float playerBottom = hitboxPos.y - playerHalfH;
-            float playerTop    = hitboxPos.y + playerHalfH;
-            float propBottom   = prop->position.y - prop->height * 0.5f;
-            float propTop      = prop->position.y + prop->height * 0.5f;
-
-            if (playerBottom > propTop || playerTop < propBottom) continue;
-
-            // --- COLISIÓN CONFIRMADA ---
-            if (prop->category == PROP_CATEGORY_BUILDING) {
-                // Impacto con estructura monolítica: Destrucción catastrófica instantánea
-                player->hullIntegrity = 0.0f;
-                player->isDead = true;
-                player->deathTimer = 0.0f;
-                player->fatalReason = "URBAN MONOLITH COLLAPSE";
-                player->damageFlashTimer = 0.5f;
-                return true;
+            if (pathMinY > propTop || pathMaxY < propBottom) {
+                continue;
             }
-            else if (prop->category == PROP_CATEGORY_TREE) {
-                // Impacto con árbol: -20% de integridad con invulnerabilidad temporal
-                if (player->damageFlashTimer <= 0.0f) {
-                    player->hullIntegrity -= DAMAGE_TREE_STRIKE;
-                    player->damageFlashTimer = COLLISION_INVULN_TIME;
-                    player->forwardSpeed *= 0.72f;
-                    player->alertTimer = 1.8f;
-                    snprintf(player->lastAlertText, sizeof(player->lastAlertText), "ALERT: TREE STRIKE // HULL COMPROMISED -20%%");
 
-                    if (player->hullIntegrity <= 0.0f) {
+            Vector3 propC = prop->position;
+
+            // ----------------------------------------------------------------
+            // CASO A: MONOLITOS URBANOS / EDIFICIOS (PROP_CATEGORY_BUILDING)
+            // Hitbox plana orientada a la fachada visual con espesor delgado
+            // y detección continua por barrido (Swept Slab Intersection)
+            // ----------------------------------------------------------------
+            if (prop->category == PROP_CATEGORY_BUILDING) {
+                // Vector de aproximación hacia el centro del edificio
+                Vector2 toProp = { propC.x - pPrev.x, propC.z - pPrev.z };
+                float distToProp = sqrtf(toProp.x * toProp.x + toProp.y * toProp.y);
+
+                Vector2 N; // Normal de aproximación / profundidad
+                if (distToProp > 0.001f) {
+                    N = (Vector2){ toProp.x / distToProp, toProp.y / distToProp };
+                } else {
+                    N = (Vector2){ player->forward.x, player->forward.z };
+                    float lenN = sqrtf(N.x * N.x + N.y * N.y);
+                    if (lenN > 0.001f) { N.x /= lenN; N.y /= lenN; }
+                    else N = (Vector2){ 0.0f, 1.0f };
+                }
+
+                // Tangente lateral a lo largo de la fachada del edificio
+                Vector2 T = { -N.y, N.x };
+
+                // Dimensiones del volumen sólido del edificio:
+                // Ancho sólido = semi-ancho frontal (76% del sprite visual) + radio de nave
+                float solidHalfW = prop->collisionRadius + shipRadius;
+                // Grosor delgado de la fachada = 6.0m + radio nave (elimina chocar 30m en el aire)
+                float solidHalfD = 6.0f + shipRadius;
+
+                // Proyección de posiciones previa y actual en el marco local (u=lateral, v=profundidad)
+                float relPrevX = pPrev.x - propC.x;
+                float relPrevZ = pPrev.z - propC.z;
+                float uPrev = relPrevX * T.x + relPrevZ * T.y;
+                float vPrev = relPrevX * N.x + relPrevZ * N.y; // < 0 cuando está frente al edificio
+
+                float relCurrX = pCurr.x - propC.x;
+                float relCurrZ = pCurr.z - propC.z;
+                float uCurr = relCurrX * T.x + relCurrZ * T.y;
+                float vCurr = relCurrX * N.x + relCurrZ * N.y;
+
+                bool impactConfirmed = false;
+                float tImpact = 1.0f;
+
+                // 1. ¿Está actualmente dentro del volumen sólido de la fachada?
+                if (fabsf(uCurr) <= solidHalfW && fabsf(vCurr) <= solidHalfD) {
+                    impactConfirmed = true;
+                    tImpact = 1.0f;
+                }
+                // 2. ¿Cruzó la cara frontal del volumen durante este frame? (Anti-Tunneling)
+                else if (vPrev < -solidHalfD && vCurr >= -solidHalfD) {
+                    float denom = vCurr - vPrev;
+                    if (denom > 0.0001f) {
+                        float tFront = (-solidHalfD - vPrev) / denom;
+                        tFront = Clamp(tFront, 0.0f, 1.0f);
+                        float uAtFront = uPrev + tFront * (uCurr - uPrev);
+                        if (fabsf(uAtFront) <= solidHalfW) {
+                            impactConfirmed = true;
+                            tImpact = tFront;
+                        }
+                    }
+                }
+                // 3. ¿Cruzó el plano visual cero durante este frame? (Anti-Tunneling)
+                else if (vPrev <= 0.0f && vCurr >= 0.0f) {
+                    float denom = vCurr - vPrev;
+                    if (denom > 0.0001f) {
+                        float tPlane = -vPrev / denom;
+                        tPlane = Clamp(tPlane, 0.0f, 1.0f);
+                        float uAtPlane = uPrev + tPlane * (uCurr - uPrev);
+                        if (fabsf(uAtPlane) <= solidHalfW) {
+                            impactConfirmed = true;
+                            tImpact = tPlane;
+                        }
+                    }
+                }
+
+                if (impactConfirmed) {
+                    float yAtImpact = pPrev.y + tImpact * (pCurr.y - pPrev.y);
+                    if (yAtImpact + shipHalfH >= propBottom && yAtImpact - shipHalfH <= propTop) {
+                        // Impacto catastrófico contra monolito confirmado
                         player->hullIntegrity = 0.0f;
                         player->isDead = true;
                         player->deathTimer = 0.0f;
-                        player->fatalReason = "CRITICAL HULL INTEGRITY FAILURE";
+                        player->fatalReason = "URBAN MONOLITH COLLAPSE";
+                        player->damageFlashTimer = 0.40f;
+
+                        // Fijar la posición exacta del impacto en el morro del avión
+                        player->position.x = pPrev.x + tImpact * (pCurr.x - pPrev.x);
+                        player->position.y = yAtImpact;
+                        player->position.z = pPrev.z + tImpact * (pCurr.z - pPrev.z);
+                        player->forwardSpeed = 0.0f;
+                        player->velocity = (Vector3){ 0 };
                         return true;
+                    }
+                }
+            }
+            // ----------------------------------------------------------------
+            // CASO B: ÁRBOLES / PALMERAS (PROP_CATEGORY_TREE)
+            // Tronco cilíndrico vertical con proyección swept-segment continua
+            // ----------------------------------------------------------------
+            else if (prop->category == PROP_CATEGORY_TREE) {
+                float segDx = pCurr.x - pPrev.x;
+                float segDz = pCurr.z - pPrev.z;
+                float segLenSq = segDx * segDx + segDz * segDz;
+
+                float t = 0.0f;
+                if (segLenSq > 0.0001f) {
+                    t = ((propC.x - pPrev.x) * segDx + (propC.z - pPrev.z) * segDz) / segLenSq;
+                    t = Clamp(t, 0.0f, 1.0f);
+                }
+
+                float closeX = pPrev.x + t * segDx;
+                float closeZ = pPrev.z + t * segDz;
+                float closeY = pPrev.y + t * (pCurr.y - pPrev.y);
+
+                float trunkRadius = prop->collisionRadius;
+                float maxTreeDist = trunkRadius + shipRadius;
+                float dX = closeX - propC.x;
+                float dZ = closeZ - propC.z;
+
+                if (dX * dX + dZ * dZ <= maxTreeDist * maxTreeDist) {
+                    if (closeY + shipHalfH >= propBottom && closeY - shipHalfH <= propTop) {
+                        if (player->damageFlashTimer <= 0.0f) {
+                            player->hullIntegrity -= DAMAGE_TREE_STRIKE;
+                            player->damageFlashTimer = COLLISION_INVULN_TIME;
+                            player->forwardSpeed *= 0.72f;
+                            player->alertTimer = 1.8f;
+                            snprintf(player->lastAlertText, sizeof(player->lastAlertText), "ALERT: TREE STRIKE // HULL COMPROMISED -20%%");
+
+                            if (player->hullIntegrity <= 0.0f) {
+                                player->hullIntegrity = 0.0f;
+                                player->isDead = true;
+                                player->deathTimer = 0.0f;
+                                player->fatalReason = "CRITICAL HULL INTEGRITY FAILURE";
+                                return true;
+                            }
+                        }
                     }
                 }
             }

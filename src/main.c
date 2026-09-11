@@ -422,14 +422,47 @@ int main(int argc, char *argv[]) {
                     s_wasDead = true;
                     s_deathCrtSoundPlayed = false;
                     Music_Stop();
-                    Audio_StopAll();
                     player.deathQuoteIndex = rand() % 8;
                 }
 
                 player.deathTimer += dt;
 
-                // FASE 1: 0.0s a 2.0s -> PANTALLA EN NEGRO TOTAL Y SILENCIO ABSOLUTO
+                // FASE 0 (0.0s a 0.20s): IMPACT FLASH & VISIBLE CRASH FRAME
+                // Muestra la nave estampada en el obstáculo con trauma de cámara y fogonazo rojo
+                if (player.deathTimer < 0.20f) {
+                    const BiomeDefinition *bDef = Biome_Get(terrain.currentBiome);
+                    FlightCamera_Update(&flightCamera, &player, dt);
+
+                    BeginTextureMode(sceneTarget);
+                        ClearBackground(bDef->skyZenithColor);
+                        DrawRectangleGradientV(0, 0, curWidth, curHeight, bDef->skyZenithColor, bDef->skyHorizonColor);
+
+                        BeginMode3D(flightCamera.camera);
+                            Terrain_Draw(&terrain, &flightCamera.camera);
+                            Scenery_Draw(&scenery, &flightCamera.camera);
+                            Race_Draw3D(&race, &flightCamera.camera);
+                            FX_DrawPlayerShadow(&player);
+                            FX_Draw3D(&flightCamera.camera);
+                        EndMode3D();
+
+                        DrawPlayerSprite(&player, Aircraft_GetSprite(selectedAircraftIdx), &flightCamera.camera, curWidth, curHeight);
+                        FX_Draw2D(&player, curWidth, curHeight);
+
+                        // Fogonazo rojo de impacto catastrófico
+                        float flashA = (0.20f - player.deathTimer) / 0.20f;
+                        DrawRectangle(0, 0, curWidth, curHeight, (Color){ 255, 25, 25, (unsigned char)(140.0f * flashA) });
+                    EndTextureMode();
+
+                    float deathPhosphor = gameSettings.pixelFilterEnabled ? 0.75f : 0.35f;
+                    PresentScreenWithCRT(sceneTarget, scanlineShader, locScanAlpha, locScanDistort, locScanPhosphor, locScanBlue,
+                                         0.105f, 0.45f, deathPhosphor, 0.0f,
+                                         gameSettings.scanlinesEnabled, curWidth, curHeight, crtPowerOnTimer);
+                    continue;
+                }
+
+                // FASE 1: 0.20s a 2.0s -> PANTALLA EN NEGRO TOTAL Y SILENCIO ABSOLUTO TRAS EL IMPACTO
                 if (player.deathTimer < 2.0f) {
+                    Audio_StopAll();
                     BeginTextureMode(sceneTarget);
                         ClearBackground(BLACK);
                     EndTextureMode();
@@ -503,9 +536,12 @@ int main(int argc, char *argv[]) {
             if (!race.isCountdown && !race.isFinished) {
                 float prevFlash = player.damageFlashTimer;
                 Player_Update(&player, &gameSettings, dt);
-                Scenery_CheckCollisions(&scenery, &player, dt);
+                bool diedThisFrame = Scenery_CheckCollisions(&scenery, &player, dt);
 
-                if (player.isDead) {
+                if (diedThisFrame) {
+                    FlightCamera_AddTrauma(&flightCamera, 1.0f);
+                    Audio_PlayWallImpact();
+                    FX_SpawnWallSparks(player.position, (Vector3){ 0.0f, 1.0f, 0.0f }, 36);
                     continue;
                 }
 
