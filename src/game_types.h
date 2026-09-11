@@ -16,11 +16,12 @@ typedef enum GameState {
     GAME_STATE_MAIN_MENU       = 0,
     GAME_STATE_MAP_SELECT      = 1,
     GAME_STATE_AIRCRAFT_SELECT = 2,
-    GAME_STATE_PLAYING         = 3,
-    GAME_STATE_PAUSED          = 4,
-    GAME_STATE_SETTINGS        = 5,
-    GAME_STATE_CONTROLS        = 6,
-    GAME_STATE_RECORDS         = 7
+    GAME_STATE_SEED_SELECT     = 3,
+    GAME_STATE_PLAYING         = 4,
+    GAME_STATE_PAUSED          = 5,
+    GAME_STATE_SETTINGS        = 6,
+    GAME_STATE_CONTROLS        = 7,
+    GAME_STATE_RECORDS         = 8
 } GameState;
 
 typedef enum GameMode {
@@ -106,6 +107,19 @@ typedef struct PlayerJet {
     float climbCeiling;
     bool isStalling;
     float stallTimer;
+    bool wasFlying;
+
+    // Integridad del Casco, Daño y Estado Mortal
+    float hullIntegrity;
+    float maxHullIntegrity;
+    bool isDead;
+    float deathTimer;
+    float damageFlashTimer;
+    float alertTimer;
+    char lastAlertText[64];
+    const char *fatalReason;
+    int deathQuoteIndex;
+    unsigned int runSeed;
 } PlayerJet;
 
 // --- Ajustes Gráficos y de Control ---
@@ -122,6 +136,8 @@ typedef struct GameSettings {
     HUDColorTheme hudTheme;     // Paleta del HUD
     float masterVolume;         // Volumen maestro
     float musicVolume;          // Volumen de la música
+    float voiceVolume;          // Volumen de la IA N.A.D.I.A. (0.0 .. 1.0)
+    bool nadiaEnabled;          // Copiloto IA N.A.D.I.A. activa/inactiva
     bool invertPitch;           // Invertir cabeceo (arriba = picar)
     bool fullscreen;            // Pantalla completa
 } GameSettings;
@@ -197,12 +213,20 @@ typedef struct TerrainSystem {
 } TerrainSystem;
 
 // --- Vegetación y Props Billboard ---
+typedef enum PropCategory {
+    PROP_CATEGORY_BUSH     = 0, // Arbustos / vegetación baja (sin daño)
+    PROP_CATEGORY_TREE     = 1, // Árboles / palmeras (-20% HP)
+    PROP_CATEGORY_BUILDING = 2  // Edificios / monolitos urbanos (impacto letal instantáneo)
+} PropCategory;
+
 typedef struct BillboardProp {
     Vector3 position;
     float width;
     float height;
     int textureIndex;
     float randomRotation;
+    PropCategory category;
+    float collisionRadius;
 } BillboardProp;
 
 typedef struct SceneryChunk {
@@ -221,8 +245,21 @@ typedef struct ScenerySystem {
     Texture2D texTree3;
     Texture2D texBush1;
     Texture2D texBush2;
+    Texture2D texBuildSmall1;
+    Texture2D texBuildSmall2;
+    Texture2D texBuildTall1;
+    Texture2D texBuildTall2;
+    Shader billboardShader;
+    unsigned int currentSeed;
     int centerChunkX;
     int centerChunkZ;
+
+    // Zonas de exclusión de circuito (puertas y spawn sin obstáculos)
+    Vector3 checkpointPositions[RACE_TOTAL_CHECKPOINTS];
+    Vector3 checkpointDirections[RACE_TOTAL_CHECKPOINTS];
+    int checkpointCount;
+    Vector3 spawnPosition;
+    bool hasTrackClearance;
 } ScenerySystem;
 
 #endif // GAME_TYPES_H

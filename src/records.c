@@ -15,24 +15,24 @@ static void InitDefaultLeaderboards(void) {
 
     // Récords por defecto Delta Straits (Pistas fluviales)
     static const struct {
-        const char *tag; float time; float spd; const char *rank;
+        const char *tag; float time; float spd; const char *rank; unsigned int seed;
     } defaultDelta[TOP_SCORES_COUNT] = {
-        { "ACE", 88.45f,  1920.0f, "RANK S [ACE PILOT]"       },
-        { "TDR", 94.20f,  1840.0f, "RANK S [ACE PILOT]"       },
-        { "W03", 102.80f, 1760.0f, "RANK A [VETERAN PILOT]"   },
-        { "FEI", 109.15f, 1690.0f, "RANK A [VETERAN PILOT]"   },
-        { "AGS", 118.60f, 1620.0f, "RANK B [QUALIFIED PILOT]" }
+        { "ACE", 88.45f,  1920.0f, "RANK S [ACE PILOT]",       101824u },
+        { "TDR", 94.20f,  1840.0f, "RANK S [ACE PILOT]",       392104u },
+        { "W03", 102.80f, 1760.0f, "RANK A [VETERAN PILOT]",   781932u },
+        { "FEI", 109.15f, 1690.0f, "RANK A [VETERAN PILOT]",   451209u },
+        { "AGS", 118.60f, 1620.0f, "RANK B [QUALIFIED PILOT]", 602381u }
     };
 
     // Récords por defecto Hot Sands (Desierto árido)
     static const struct {
-        const char *tag; float time; float spd; const char *rank;
+        const char *tag; float time; float spd; const char *rank; unsigned int seed;
     } defaultHotsands[TOP_SCORES_COUNT] = {
-        { "PHZ", 92.10f,  1950.0f, "RANK S [ACE PILOT]"       },
-        { "DNE", 98.50f,  1860.0f, "RANK S [ACE PILOT]"       },
-        { "SKW", 105.30f, 1790.0f, "RANK A [VETERAN PILOT]"   },
-        { "SOL", 112.00f, 1710.0f, "RANK A [VETERAN PILOT]"   },
-        { "RAW", 121.40f, 1630.0f, "RANK B [QUALIFIED PILOT]" }
+        { "PHZ", 92.10f,  1950.0f, "RANK S [ACE PILOT]",       519820u },
+        { "DNE", 98.50f,  1860.0f, "RANK S [ACE PILOT]",       841029u },
+        { "SKW", 105.30f, 1790.0f, "RANK A [VETERAN PILOT]",   294103u },
+        { "SOL", 112.00f, 1710.0f, "RANK A [VETERAN PILOT]",   673912u },
+        { "RAW", 121.40f, 1630.0f, "RANK B [QUALIFIED PILOT]", 918234u }
     };
 
     for (int i = 0; i < TOP_SCORES_COUNT; i++) {
@@ -41,6 +41,7 @@ static void InitDefaultLeaderboards(void) {
         eD->finishTime = defaultDelta[i].time;
         eD->maxSpeedKmh = defaultDelta[i].spd;
         snprintf(eD->rank, sizeof(eD->rank), "%s", defaultDelta[i].rank);
+        eD->seed = defaultDelta[i].seed;
         eD->isValid = true;
 
         HighscoreEntry *eH = &s_saveData.boards[BIOME_HOTSANDS].entries[i];
@@ -48,6 +49,7 @@ static void InitDefaultLeaderboards(void) {
         eH->finishTime = defaultHotsands[i].time;
         eH->maxSpeedKmh = defaultHotsands[i].spd;
         snprintf(eH->rank, sizeof(eH->rank), "%s", defaultHotsands[i].rank);
+        eH->seed = defaultHotsands[i].seed;
         eH->isValid = true;
     }
 }
@@ -106,7 +108,7 @@ int Records_CheckQualify(BiomeType biome, float time) {
     return -1;
 }
 
-bool Records_InsertScore(BiomeType biome, int rankPos, const char *pilotTag, float time, float maxSpeedKmh, const char *rank) {
+bool Records_InsertScore(BiomeType biome, int rankPos, const char *pilotTag, float time, float maxSpeedKmh, const char *rank, unsigned int seed) {
     if (biome < 0 || biome >= BIOME_COUNT || rankPos < 0 || rankPos >= TOP_SCORES_COUNT) {
         return false;
     }
@@ -136,6 +138,7 @@ bool Records_InsertScore(BiomeType biome, int rankPos, const char *pilotTag, flo
         strncpy(entry->rank, rank, sizeof(entry->rank) - 1);
         entry->rank[sizeof(entry->rank) - 1] = '\0';
     }
+    entry->seed = seed;
     entry->isValid = true;
 
     s_isNewAbsoluteRecord = (rankPos == 0);

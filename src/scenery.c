@@ -2,14 +2,28 @@
 #include "terrain.h"
 #include "config.h"
 #include "biome.h"
+#include "race.h"
 #include "raymath.h"
 #include "rlgl.h"
 #include <stdlib.h>
+#include <stdio.h>
 #include <math.h>
 
 // ============================================================================
 // GENERADOR PROCEDURAL DE VEGETACIÓN Y PROPS POR BIOMA
 // ============================================================================
+
+static const char *s_alphaDiscardFs =
+    "#version 330\n"
+    "in vec2 fragTexCoord;\n"
+    "in vec4 fragColor;\n"
+    "out vec4 finalColor;\n"
+    "uniform sampler2D texture0;\n"
+    "void main() {\n"
+    "    vec4 texelColor = texture(texture0, fragTexCoord);\n"
+    "    if (texelColor.a < 0.15) discard;\n"
+    "    finalColor = texelColor * fragColor;\n"
+    "}\n";
 
 static unsigned int SceneryHash(int x, int z, int seed) {
     unsigned int h = (unsigned int)(x * 374761393 + z * 668265263 + seed * 96245897);
@@ -22,17 +36,20 @@ static float SceneryRandom(unsigned int *state) {
     return (float)(*state & 0x00FFFFFF) / (float)0x00FFFFFF;
 }
 
-static void GenerateChunkProps(SceneryChunk *chunk, int chunkX, int chunkZ, BiomeType biome) {
+static void GenerateChunkProps(SceneryChunk *chunk, int chunkX, int chunkZ, const ScenerySystem *scenery) {
     chunk->chunkX = chunkX;
     chunk->chunkZ = chunkZ;
     chunk->propCount = 0;
     chunk->isLoaded = true;
 
-    unsigned int rng = SceneryHash(chunkX, chunkZ, 1337 + (int)biome * 7919);
+    BiomeType biome = scenery->currentBiome;
+    unsigned int seed = scenery->currentSeed;
+
+    unsigned int rng = SceneryHash(chunkX, chunkZ, (int)seed + (int)biome * 7919);
     float chunkOriginX = (float)chunkX * TERRAIN_CHUNK_SIZE;
     float chunkOriginZ = (float)chunkZ * TERRAIN_CHUNK_SIZE;
 
-    int candidates = MAX_PROPS_PER_CHUNK + 40;
+    int candidates = MAX_PROPS_PER_CHUNK + 20;
 
     for (int i = 0; i < candidates && chunk->propCount < MAX_PROPS_PER_CHUNK; i++) {
         float localX = (SceneryRandom(&rng) - 0.5f) * (TERRAIN_CHUNK_SIZE - 20.0f);
@@ -40,38 +57,148 @@ static void GenerateChunkProps(SceneryChunk *chunk, int chunkX, int chunkZ, Biom
         float worldX = chunkOriginX + localX;
         float worldZ = chunkOriginZ + localZ;
 
+        // 0. EXCLUSIÓN DE CIRCUITOS: Impedir que aparezcan edificios o árboles en puertas o spawn
+        if (scenery->hasTrackClearance) {
+            // Radio de seguridad circular amplio alrededor del spawn (500m)
+            float dxSpawn = worldX - scenery->spawnPosition.x;
+            float dzSpawn = worldZ - scenery->spawnPosition.z;
+            if (dxSpawn * dxSpawn + dzSpawn * dzSpawn < 500.0f * 500.0f) {
+                continue;
+            }
+
+            // Exclusión de corredor entre Spawn y la Primer Gate (Checkpoint 0)
+            if (scenery->checkpointCount > 0) {
+                Vector3 pA = scenery->spawnPosition;
+                Vector3 pB = scenery->checkpointPositions[0];
+                float segX = pB.x - pA.x;
+                float segZ = pB.z - pA.z;
+                float segLenSq = segX * segX + segZ * segZ;
+                if (segLenSq > 1.0f) {
+                    float t = ((worldX - pA.x) * segX + (worldZ - pA.z) * segZ) / segLenSq;
+                    if (t >= -0.05f && t <= 1.05f) {
+                        float projX = pA.x + t * segX;
+                        float projZ = pA.z + t * segZ;
+                        float dX = worldX - projX;
+                        float dZ = worldZ - projZ;
+                        // Pasillo libre de 400m de ancho lateral entre el spawn y la primer gate
+                        if (dX * dX + dZ * dZ < 400.0f * 400.0f) {
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // Exclusión total de 1 km (1000m) a la redonda de CUALQUIER gate
+            bool nearGate = false;
+            for (int k = 0; k < scenery->checkpointCount; k++) {
+                Vector3 cpPos = scenery->checkpointPositions[k];
+                float dx = worldX - cpPos.x;
+                float dz = worldZ - cpPos.z;
+                float distSq = dx * dx + dz * dz;
+
+                // Radio de seguridad estricto de 1000m (1km)
+                if (distSq < 1000.0f * 1000.0f) {
+                    nearGate = true;
+                    break;
+                }
+            }
+            if (nearGate) continue;
+        }
+
         float groundY = Terrain_GetHeight(worldX, worldZ);
         Vector3 normal = Terrain_GetNormal(worldX, worldZ);
         float slope = 1.0f - normal.y;
 
-        // 1. REGLAS PARA HOT SANDS (Arbustos del desierto en depresiones)
+        // 1. REGLAS PARA HOT SANDS (Ciudad en ruinas al 25% de densidad y más desperdigada + arbustos)
         if (biome == BIOME_HOTSANDS) {
-            float desertCluster = sinf(worldX * 0.0025f) * cosf(worldZ * 0.0025f);
-            float spawnChance = (desertCluster > 0.20f) ? 0.22f : 0.04f; // Vegetación árida muy dispersa
-            if (SceneryRandom(&rng) > spawnChance) continue;
+            float cityNoise = sinf(worldX * 0.0015f + 1.3f) * cosf(worldZ * 0.0015f + 0.9f);
 
-            float baseHeight = 4.5f + SceneryRandom(&rng) * 3.5f; // Arbusto de 4.5m a 8m
-            float baseWidth  = baseHeight * (1.0f + SceneryRandom(&rng) * 0.4f);
-            int texIdx = (SceneryRandom(&rng) > 0.5f) ? 1 : 0; // Bush 1 o Bush 2
+            // Si estamos en un sector de ruinas urbanas
+            if (cityNoise > 0.22f) {
+                // Densidad reducida a un 25% de la previa (0.75f / 0.48f -> 0.18f / 0.11f)
+                float spawnChance = (cityNoise > 0.45f) ? 0.18f : 0.11f;
+                if (SceneryRandom(&rng) > spawnChance) continue;
 
-            BillboardProp *prop = &chunk->props[chunk->propCount++];
-            prop->width = baseWidth;
-            prop->height = baseHeight;
-            prop->textureIndex = texIdx;
-            prop->position = (Vector3){ worldX, groundY + baseHeight * 0.5f, worldZ };
-            prop->randomRotation = SceneryRandom(&rng) * 360.0f;
+                // Edificios más desperdigados: verificación de distancia mínima entre props
+                const float MIN_BUILDING_DIST = 38.0f;
+                bool tooClose = false;
+                for (int p = 0; p < chunk->propCount; p++) {
+                    float pdx = chunk->props[p].position.x - worldX;
+                    float pdz = chunk->props[p].position.z - worldZ;
+                    if (pdx * pdx + pdz * pdz < MIN_BUILDING_DIST * MIN_BUILDING_DIST) {
+                        tooClose = true;
+                        break;
+                    }
+                }
+                if (tooClose) continue;
+
+                bool isTall = (SceneryRandom(&rng) < 0.38f);
+                float baseHeight;
+                float baseWidth;
+                int texIdx;
+
+                if (isTall) {
+                    baseHeight = 110.0f + SceneryRandom(&rng) * 70.0f; // 110m a 180m de altura
+                    baseWidth = baseHeight * 0.48f;
+                    texIdx = (SceneryRandom(&rng) > 0.5f) ? 5 : 4; // building_tall_1 o 2
+                } else {
+                    baseHeight = 48.0f + SceneryRandom(&rng) * 32.0f;  // 48m a 80m de altura
+                    baseWidth = baseHeight * 0.82f;
+                    texIdx = (SceneryRandom(&rng) > 0.5f) ? 3 : 2; // building_small_1 o 2
+                }
+
+                BillboardProp *prop = &chunk->props[chunk->propCount++];
+                prop->width = baseWidth;
+                prop->height = baseHeight;
+                prop->textureIndex = texIdx;
+                prop->position = (Vector3){ worldX, groundY + baseHeight * 0.5f, worldZ };
+                prop->randomRotation = SceneryRandom(&rng) * 360.0f;
+                prop->category = PROP_CATEGORY_BUILDING;
+                prop->collisionRadius = baseWidth * 0.21f; // Hitbox ajustada al fuste central del edificio
+            } else {
+                // Arbustos dispersos en las dunas
+                float desertCluster = sinf(worldX * 0.0025f) * cosf(worldZ * 0.0025f);
+                float spawnChance = (desertCluster > 0.20f) ? 0.16f : 0.02f;
+                if (SceneryRandom(&rng) > spawnChance) continue;
+
+                float baseHeight = 4.5f + SceneryRandom(&rng) * 3.5f;
+                float baseWidth  = baseHeight * (1.0f + SceneryRandom(&rng) * 0.4f);
+                int texIdx = (SceneryRandom(&rng) > 0.5f) ? 1 : 0;
+
+                BillboardProp *prop = &chunk->props[chunk->propCount++];
+                prop->width = baseWidth;
+                prop->height = baseHeight;
+                prop->textureIndex = texIdx;
+                prop->position = (Vector3){ worldX, groundY + baseHeight * 0.5f, worldZ };
+                prop->randomRotation = SceneryRandom(&rng) * 360.0f;
+                prop->category = PROP_CATEGORY_BUSH;
+                prop->collisionRadius = 0.0f;
+            }
         }
         // ====================================================================
-        // 3. REGLAS PARA DELTA STRAITS (Palmeras/Árboles SOLO en pasto de islas)
+        // 2. REGLAS PARA DELTA STRAITS (Palmeras/Árboles SOLO en pasto de islas)
         // ====================================================================
         else if (biome == BIOME_DELTASTRAITS) {
-            // Estrictamente por encima del agua (45m) y de la playa (48.5m)
-            if (groundY < 49.0f) continue;
+            // Estrictamente por encima del agua (45m) y de la playa con buen margen (50m)
+            if (groundY < 50.0f) continue;
             if (slope > SCENERY_MAX_SLOPE) continue;
 
             float islandNoise = sinf(worldX * 0.004f + 3.1f) * cosf(worldZ * 0.004f + 1.2f);
-            float spawnChance = (islandNoise > 0.0f) ? 0.70f : 0.15f;
+            float spawnChance = (islandNoise > 0.0f) ? 0.55f : 0.12f;
             if (SceneryRandom(&rng) > spawnChance) continue;
+
+            // Distancia mínima entre árboles para evitar amontonamiento
+            const float MIN_TREE_DIST = 18.0f;
+            bool tooClose = false;
+            for (int p = 0; p < chunk->propCount; p++) {
+                float pdx = chunk->props[p].position.x - worldX;
+                float pdz = chunk->props[p].position.z - worldZ;
+                if (pdx * pdx + pdz * pdz < MIN_TREE_DIST * MIN_TREE_DIST) {
+                    tooClose = true;
+                    break;
+                }
+            }
+            if (tooClose) continue;
 
             float baseHeight = 18.0f + SceneryRandom(&rng) * 12.0f;
             float baseWidth  = baseHeight * (0.65f + SceneryRandom(&rng) * 0.20f);
@@ -85,6 +212,8 @@ static void GenerateChunkProps(SceneryChunk *chunk, int chunkX, int chunkZ, Biom
             prop->textureIndex = texIdx;
             prop->position = (Vector3){ worldX, groundY + baseHeight * 0.5f, worldZ };
             prop->randomRotation = SceneryRandom(&rng) * 360.0f;
+            prop->category = PROP_CATEGORY_TREE;
+            prop->collisionRadius = baseWidth * 0.18f; // Hitbox ajustada al tronco
         }
     }
 }
@@ -93,8 +222,15 @@ static void GenerateChunkProps(SceneryChunk *chunk, int chunkX, int chunkZ, Biom
 // INICIALIZACIÓN Y GESTIÓN DE VEGETACIÓN
 // ============================================================================
 
-void Scenery_Init(ScenerySystem *scenery) {
+void Scenery_Init(ScenerySystem *scenery, unsigned int seed) {
     scenery->currentBiome = BIOME_DELTASTRAITS;
+    scenery->currentSeed = seed;
+    scenery->hasTrackClearance = false;
+    scenery->checkpointCount = 0;
+    scenery->spawnPosition = (Vector3){ 0 };
+
+    // Cargar shader de recorte alpha para evitar oclusión Z de fondo en zonas transparentes
+    scenery->billboardShader = LoadShaderFromMemory(NULL, s_alphaDiscardFs);
 
     // Cargar texturas de árboles y vegetación
     scenery->texTree1 = LoadTexture(PATH_TEX_TREE_1);
@@ -103,11 +239,21 @@ void Scenery_Init(ScenerySystem *scenery) {
     scenery->texBush1 = LoadTexture(PATH_TEX_DESERT_BUSH_1);
     scenery->texBush2 = LoadTexture(PATH_TEX_DESERT_BUSH_2);
 
+    // Cargar nuevas texturas de edificios para bioma desierto (ruinas urbanas)
+    scenery->texBuildSmall1 = LoadTexture(PATH_TEX_BUILD_SMALL_1);
+    scenery->texBuildSmall2 = LoadTexture(PATH_TEX_BUILD_SMALL_2);
+    scenery->texBuildTall1  = LoadTexture(PATH_TEX_BUILD_TALL_1);
+    scenery->texBuildTall2  = LoadTexture(PATH_TEX_BUILD_TALL_2);
+
     SetTextureFilter(scenery->texTree1, TEXTURE_FILTER_POINT);
     SetTextureFilter(scenery->texTree2, TEXTURE_FILTER_POINT);
     SetTextureFilter(scenery->texTree3, TEXTURE_FILTER_POINT);
     SetTextureFilter(scenery->texBush1, TEXTURE_FILTER_POINT);
     SetTextureFilter(scenery->texBush2, TEXTURE_FILTER_POINT);
+    SetTextureFilter(scenery->texBuildSmall1, TEXTURE_FILTER_POINT);
+    SetTextureFilter(scenery->texBuildSmall2, TEXTURE_FILTER_POINT);
+    SetTextureFilter(scenery->texBuildTall1, TEXTURE_FILTER_POINT);
+    SetTextureFilter(scenery->texBuildTall2, TEXTURE_FILTER_POINT);
 
     scenery->centerChunkX = 0;
     scenery->centerChunkZ = 0;
@@ -117,20 +263,40 @@ void Scenery_Init(ScenerySystem *scenery) {
     for (int gz = -halfGrid; gz <= halfGrid; gz++) {
         for (int gx = -halfGrid; gx <= halfGrid; gx++) {
             SceneryChunk *chunk = &scenery->chunks[chunkIdx++];
-            GenerateChunkProps(chunk, gx, gz, scenery->currentBiome);
+            GenerateChunkProps(chunk, gx, gz, scenery);
         }
     }
 }
 
-void Scenery_LoadBiome(ScenerySystem *scenery, BiomeType biome) {
+void Scenery_LoadBiome(ScenerySystem *scenery, BiomeType biome, unsigned int seed) {
     scenery->currentBiome = biome;
+    scenery->currentSeed = seed;
     int halfGrid = TERRAIN_CHUNK_GRID / 2;
     int chunkIdx = 0;
 
     for (int gz = -halfGrid; gz <= halfGrid; gz++) {
         for (int gx = -halfGrid; gx <= halfGrid; gx++) {
             SceneryChunk *chunk = &scenery->chunks[chunkIdx++];
-            GenerateChunkProps(chunk, gx, gz, biome);
+            GenerateChunkProps(chunk, gx, gz, scenery);
+        }
+    }
+}
+
+void Scenery_SetTrackClearance(ScenerySystem *scenery, const struct RaceTrack *race) {
+    if (!scenery || !race) return;
+    scenery->checkpointCount = (race->totalCheckpoints > RACE_TOTAL_CHECKPOINTS) ? RACE_TOTAL_CHECKPOINTS : race->totalCheckpoints;
+    for (int i = 0; i < scenery->checkpointCount; i++) {
+        scenery->checkpointPositions[i] = race->checkpoints[i].position;
+        scenery->checkpointDirections[i] = race->checkpoints[i].direction;
+    }
+    scenery->spawnPosition = race->spawnPosition;
+    scenery->hasTrackClearance = true;
+
+    // Regenerar chunks cargados para limpiar cualquier prop que hubiese quedado cerca de una puerta
+    for (int i = 0; i < TERRAIN_CHUNK_GRID * TERRAIN_CHUNK_GRID; i++) {
+        SceneryChunk *chunk = &scenery->chunks[i];
+        if (chunk->isLoaded) {
+            GenerateChunkProps(chunk, chunk->chunkX, chunk->chunkZ, scenery);
         }
     }
 }
@@ -185,10 +351,32 @@ void Scenery_Update(ScenerySystem *scenery, Vector3 playerPos) {
                     SceneryChunk *chunk = &scenery->chunks[i];
                     if (chunk->chunkX < minX || chunk->chunkX > maxX ||
                         chunk->chunkZ < minZ || chunk->chunkZ > maxZ) {
-                        GenerateChunkProps(chunk, targetChunkX, targetChunkZ, scenery->currentBiome);
+                        GenerateChunkProps(chunk, targetChunkX, targetChunkZ, scenery);
                         break;
                     }
                 }
+            }
+        }
+    }
+}
+
+void Scenery_ForceCenter(ScenerySystem *scenery, Vector3 playerPos) {
+    int currentCenterX = (int)roundf(playerPos.x / TERRAIN_CHUNK_SIZE);
+    int currentCenterZ = (int)roundf(playerPos.z / TERRAIN_CHUNK_SIZE);
+
+    scenery->centerChunkX = currentCenterX;
+    scenery->centerChunkZ = currentCenterZ;
+
+    int halfGrid = TERRAIN_CHUNK_GRID / 2;
+    int chunkIdx = 0;
+
+    for (int gz = -halfGrid; gz <= halfGrid; gz++) {
+        for (int gx = -halfGrid; gx <= halfGrid; gx++) {
+            if (chunkIdx < TERRAIN_CHUNK_GRID * TERRAIN_CHUNK_GRID) {
+                SceneryChunk *chunk = &scenery->chunks[chunkIdx++];
+                int targetX = currentCenterX + gx;
+                int targetZ = currentCenterZ + gz;
+                GenerateChunkProps(chunk, targetX, targetZ, scenery);
             }
         }
     }
@@ -202,7 +390,7 @@ void Scenery_SetRenderDistance(ScenerySystem *scenery, RenderDistance dist) {
 }
 
 // ============================================================================
-// RENDERIZADO 3D DE VEGETACIÓN (BILLBOARDS CON NIEBLA)
+// RENDERIZADO 3D DE VEGETACIÓN (BILLBOARDS CON NIEBLA Y ALPHA DISCARD)
 // ============================================================================
 
 void Scenery_Draw(const ScenerySystem *scenery, const Camera3D *camera) {
@@ -211,6 +399,10 @@ void Scenery_Draw(const ScenerySystem *scenery, const Camera3D *camera) {
     float maxDist  = (s_sceneryRenderDist == RENDER_DIST_HIGH) ? SCENERY_RENDER_DIST_HIGH : SCENERY_RENDER_DIST_LOW;
     float fogStart = (s_sceneryRenderDist == RENDER_DIST_HIGH) ? TERRAIN_FOG_START_HIGH : bDef->fogStart;
     float fogEnd   = (s_sceneryRenderDist == RENDER_DIST_HIGH) ? TERRAIN_FOG_END_HIGH   : bDef->fogEnd;
+
+    if (scenery->billboardShader.id != 0) {
+        BeginShaderMode(scenery->billboardShader);
+    }
 
     for (int c = 0; c < TERRAIN_CHUNK_GRID * TERRAIN_CHUNK_GRID; c++) {
         const SceneryChunk *chunk = &scenery->chunks[c];
@@ -237,9 +429,14 @@ void Scenery_Draw(const ScenerySystem *scenery, const Camera3D *camera) {
             }
 
             // Seleccionar textura según el bioma y el índice del prop
-            Texture2D drawTex;
+            Texture2D drawTex = { 0 };
             if (scenery->currentBiome == BIOME_HOTSANDS) {
-                drawTex = (prop->textureIndex == 0) ? scenery->texBush1 : scenery->texBush2;
+                if (prop->textureIndex == 0)      drawTex = scenery->texBush1;
+                else if (prop->textureIndex == 1) drawTex = scenery->texBush2;
+                else if (prop->textureIndex == 2) drawTex = scenery->texBuildSmall1;
+                else if (prop->textureIndex == 3) drawTex = scenery->texBuildSmall2;
+                else if (prop->textureIndex == 4) drawTex = scenery->texBuildTall1;
+                else if (prop->textureIndex == 5) drawTex = scenery->texBuildTall2;
             } else {
                 if (prop->textureIndex == 0)      drawTex = scenery->texTree1;
                 else if (prop->textureIndex == 1) drawTex = scenery->texTree2;
@@ -251,6 +448,96 @@ void Scenery_Draw(const ScenerySystem *scenery, const Camera3D *camera) {
             }
         }
     }
+
+    if (scenery->billboardShader.id != 0) {
+        EndShaderMode();
+    }
+}
+
+// ============================================================================
+// DETECCIÓN DE COLISIONES DE PROPS (ÁRBOLES Y EDIFICIOS)
+// ============================================================================
+
+bool Scenery_CheckCollisions(const ScenerySystem *scenery, PlayerJet *player, float dt) {
+    (void)dt;
+    if (player->isDead) return true;
+
+    // Sincronización 1:1 de la hitbox con la posición 3D real de la nave en el mundo
+    Vector3 hitboxPos = player->position;
+
+    int centerChunkX = (int)roundf(hitboxPos.x / TERRAIN_CHUNK_SIZE);
+    int centerChunkZ = (int)roundf(hitboxPos.z / TERRAIN_CHUNK_SIZE);
+
+    for (int c = 0; c < TERRAIN_CHUNK_GRID * TERRAIN_CHUNK_GRID; c++) {
+        const SceneryChunk *chunk = &scenery->chunks[c];
+        if (!chunk->isLoaded) continue;
+
+        // Comprobar sólo los 9 chunks inmediatamente adyacentes a la posición real de la hitbox
+        if (abs(chunk->chunkX - centerChunkX) > 1 || abs(chunk->chunkZ - centerChunkZ) > 1) {
+            continue;
+        }
+
+        for (int p = 0; p < chunk->propCount; p++) {
+            const BillboardProp *prop = &chunk->props[p];
+            if (prop->category == PROP_CATEGORY_BUSH || prop->collisionRadius <= 0.0f) {
+                continue;
+            }
+
+            // En Delta Straits no existen edificios (salvaguarda ante colisiones fantasma)
+            if (prop->category == PROP_CATEGORY_BUILDING && scenery->currentBiome == BIOME_DELTASTRAITS) {
+                continue;
+            }
+
+            float dx = hitboxPos.x - prop->position.x;
+            float dz = hitboxPos.z - prop->position.z;
+            float shipRadius = 3.5f;
+            float maxDist = prop->collisionRadius + shipRadius;
+
+            if (fabsf(dx) > maxDist || fabsf(dz) > maxDist) continue;
+            float distSq = dx * dx + dz * dz;
+            if (distSq > maxDist * maxDist) continue;
+
+            // Comprobación de altura vertical (Y)
+            float playerHalfH  = 2.8f;
+            float playerBottom = hitboxPos.y - playerHalfH;
+            float playerTop    = hitboxPos.y + playerHalfH;
+            float propBottom   = prop->position.y - prop->height * 0.5f;
+            float propTop      = prop->position.y + prop->height * 0.5f;
+
+            if (playerBottom > propTop || playerTop < propBottom) continue;
+
+            // --- COLISIÓN CONFIRMADA ---
+            if (prop->category == PROP_CATEGORY_BUILDING) {
+                // Impacto con estructura monolítica: Destrucción catastrófica instantánea
+                player->hullIntegrity = 0.0f;
+                player->isDead = true;
+                player->deathTimer = 0.0f;
+                player->fatalReason = "URBAN MONOLITH COLLAPSE";
+                player->damageFlashTimer = 0.5f;
+                return true;
+            }
+            else if (prop->category == PROP_CATEGORY_TREE) {
+                // Impacto con árbol: -20% de integridad con invulnerabilidad temporal
+                if (player->damageFlashTimer <= 0.0f) {
+                    player->hullIntegrity -= DAMAGE_TREE_STRIKE;
+                    player->damageFlashTimer = COLLISION_INVULN_TIME;
+                    player->forwardSpeed *= 0.72f;
+                    player->alertTimer = 1.8f;
+                    snprintf(player->lastAlertText, sizeof(player->lastAlertText), "ALERT: TREE STRIKE // HULL COMPROMISED -20%%");
+
+                    if (player->hullIntegrity <= 0.0f) {
+                        player->hullIntegrity = 0.0f;
+                        player->isDead = true;
+                        player->deathTimer = 0.0f;
+                        player->fatalReason = "CRITICAL HULL INTEGRITY FAILURE";
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    return player->isDead;
 }
 
 // ============================================================================
@@ -258,9 +545,14 @@ void Scenery_Draw(const ScenerySystem *scenery, const Camera3D *camera) {
 // ============================================================================
 
 void Scenery_Unload(ScenerySystem *scenery) {
+    if (scenery->billboardShader.id != 0) UnloadShader(scenery->billboardShader);
     if (scenery->texTree1.id != 0) UnloadTexture(scenery->texTree1);
     if (scenery->texTree2.id != 0) UnloadTexture(scenery->texTree2);
     if (scenery->texTree3.id != 0) UnloadTexture(scenery->texTree3);
     if (scenery->texBush1.id != 0) UnloadTexture(scenery->texBush1);
     if (scenery->texBush2.id != 0) UnloadTexture(scenery->texBush2);
+    if (scenery->texBuildSmall1.id != 0) UnloadTexture(scenery->texBuildSmall1);
+    if (scenery->texBuildSmall2.id != 0) UnloadTexture(scenery->texBuildSmall2);
+    if (scenery->texBuildTall1.id != 0)  UnloadTexture(scenery->texBuildTall1);
+    if (scenery->texBuildTall2.id != 0)  UnloadTexture(scenery->texBuildTall2);
 }

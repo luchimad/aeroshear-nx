@@ -14,7 +14,19 @@
 #include <string.h>
 #include <math.h>
 
-void Race_Init(RaceTrack *race, BiomeType biome, Vector3 *startPlayerPos, float *startYaw) {
+static const char *s_alphaDiscardFs =
+    "#version 330\n"
+    "in vec2 fragTexCoord;\n"
+    "in vec4 fragColor;\n"
+    "out vec4 finalColor;\n"
+    "uniform sampler2D texture0;\n"
+    "void main() {\n"
+    "    vec4 texelColor = texture(texture0, fragTexCoord);\n"
+    "    if (texelColor.a < 0.15) discard;\n"
+    "    finalColor = texelColor * fragColor;\n"
+    "}\n";
+
+void Race_Init(RaceTrack *race, BiomeType biome, unsigned int seed, Vector3 *startPlayerPos, float *startYaw) {
     race->totalCheckpoints = RACE_TOTAL_CHECKPOINTS; // 18
     race->currentCheckpoint = 0;
     race->raceTimer = 0.0f;
@@ -33,6 +45,7 @@ void Race_Init(RaceTrack *race, BiomeType biome, Vector3 *startPlayerPos, float 
     race->isOutOfBoundsWarning = false;
     race->cameraSnapRequested = false;
     race->currentBiome = biome;
+    race->runSeed = seed;
     race->isNewRecord = false;
     race->qualifyingRank = -1;
     race->nameEntered = false;
@@ -43,19 +56,31 @@ void Race_Init(RaceTrack *race, BiomeType biome, Vector3 *startPlayerPos, float 
     race->maxSpeedKnots = 0.0f;
     race->maxMach = 0.0f;
 
+    // Inicialización N.A.D.I.A. // Réseau-Orbital Avionics
+    race->nadiaActive = false;
+    race->nadiaTimer = 0.0f;
+    race->nadiaMaxDuration = 2.8f;
+    race->nadiaTitle[0] = '\0';
+    race->nadiaSubtitle[0] = '\0';
+    race->nadiaDistance[0] = '\0';
+    race->nadiaWarnCooldown = 0.0f;
+    Audio_ClearNadiaQueue();
+
     const BiomeDefinition *bDef = Biome_Get(biome);
     snprintf(race->trackName, sizeof(race->trackName), "%s CIRCUIT", bDef->name);
 
     if (!race->isTexturesLoaded) {
         race->texPylon = LoadTexture(PATH_TEX_PYLON);
         race->texRing  = LoadTexture(PATH_TEX_RING);
+        race->billboardShader = LoadShaderFromMemory(NULL, s_alphaDiscardFs);
         SetTextureFilter(race->texPylon, TEXTURE_FILTER_BILINEAR);
         SetTextureFilter(race->texRing,  TEXTURE_FILTER_BILINEAR);
         race->isTexturesLoaded = true;
     }
 
-    float circuitRadius = 5200.0f;
-    float parTimeStep = 5.2f;
+    float circuitRadius = 20800.0f; // Distancia entre waypoints ampliada 200% (de 10400m a 20800m)
+    float parTimeStep = 10.4f;      // Adaptado proporcionalmente con velocidad duplicada (880 m/s)
+    float seedPhase = (float)(seed % 1000) * 0.006283f;
 
     // 1. Coordenadas horizontales de los 18 checkpoints
     for (int i = 0; i < race->totalCheckpoints; i++) {
@@ -66,7 +91,7 @@ void Race_Init(RaceTrack *race, BiomeType biome, Vector3 *startPlayerPos, float 
         cp->parTime = (float)(i + 1) * parTimeStep;
 
         float angle = ((float)i / (float)race->totalCheckpoints) * 2.0f * PI;
-        float rOffset = sinf(angle * 2.0f) * 600.0f + cosf(angle * 3.0f) * 300.0f;
+        float rOffset = sinf(angle * 2.0f + seedPhase) * 2400.0f + cosf(angle * 3.0f + seedPhase * 1.5f) * 1200.0f;
         float currentRadius = circuitRadius + rOffset;
 
         float gx = cosf(angle) * currentRadius;
@@ -138,14 +163,14 @@ void Race_Init(RaceTrack *race, BiomeType biome, Vector3 *startPlayerPos, float 
     if (startPlayerPos && startYaw) {
         RaceCheckpoint *cp0 = &race->checkpoints[0];
         Vector3 startDir = cp0->direction;
-        float startDist = 480.0f;
+        float startDist = 1200.0f; // Distancia de arranque ampliada proporcionalmente
 
         startPlayerPos->x = cp0->position.x - startDir.x * startDist;
         startPlayerPos->z = cp0->position.z - startDir.z * startDist;
 
         float startGround = Terrain_GetHeight(startPlayerPos->x, startPlayerPos->z);
         if (bDef->hasWater && startGround < bDef->waterLevel) startGround = bDef->waterLevel;
-        startPlayerPos->y = startGround + 13.5f;
+        startPlayerPos->y = startGround + 21.0f;
         race->spawnPosition = *startPlayerPos;
 
         Vector3 toGate = Vector3Normalize(Vector3Subtract(cp0->position, *startPlayerPos));
@@ -157,6 +182,7 @@ static void Race_OnFinish(RaceTrack *race, const PlayerJet *player) {
     if (race->isFinished) return;
     race->isFinished = true;
     race->finishTotalTime = race->raceTimer;
+    race->nadiaActive = false;
 
     // Frenar y detener completamente el hovercraft al cruzar la meta
     if (player) {
@@ -182,6 +208,104 @@ static void Race_OnFinish(RaceTrack *race, const PlayerJet *player) {
     }
 }
 
+// ============================================================================
+// SISTEMA DE COPILOTO TÁCTICO N.A.D.I.A. // RÉSEAU-ORBITAL AVIONICS
+// ============================================================================
+void Nadia_TriggerGateCallout(RaceTrack *race, const PlayerJet *player, int nextIdx) {
+    if (!race || nextIdx < 0 || nextIdx >= race->totalCheckpoints) return;
+
+    RaceCheckpoint *cpNext = &race->checkpoints[nextIdx];
+    Vector3 pCurr = (player) ? player->position : race->spawnPosition;
+    Vector3 toNext = Vector3Subtract(cpNext->position, pCurr);
+    float dist = Vector3Length(toNext);
+
+    // Formatear distancia en metros o kilómetros
+    if (dist >= 1000.0f) {
+        snprintf(race->nadiaDistance, sizeof(race->nadiaDistance), "%.1f KM", dist * 0.001f);
+    } else {
+        snprintf(race->nadiaDistance, sizeof(race->nadiaDistance), "%.0f M", dist);
+    }
+
+    // Ángulo horizontal relativo al rumbo actual del piloto
+    float desiredAngle = atan2f(-toNext.x, toNext.z);
+    float currentHeading = (player) ? player->heading : 0.0f;
+    float angleDiff = desiredAngle - currentHeading;
+    while (angleDiff > PI)  angleDiff -= 2.0f * PI;
+    while (angleDiff < -PI) angleDiff += 2.0f * PI;
+    float degDiff = angleDiff * RAD2DEG;
+
+    // Diferencia de cota vertical
+    float deltaY = cpNext->position.y - pCurr.y;
+
+    NadiaCallout callout = NADIA_CALLOUT_NONE;
+
+    if (cpNext->type == CHECKPOINT_FINISH_LINE) {
+        snprintf(race->nadiaTitle, sizeof(race->nadiaTitle), "FINAL GATE : SURFACE [FINISH LINE]");
+        snprintf(race->nadiaSubtitle, sizeof(race->nadiaSubtitle), "VECTOR : MAXIMUM THRUST // FLAT OUT");
+        callout = NADIA_CALLOUT_FINAL_GATE;
+    } else if (cpNext->type == CHECKPOINT_AIR_RING) {
+        snprintf(race->nadiaTitle, sizeof(race->nadiaTitle), "TARGET GATE %02d : AERIAL [RING]", nextIdx + 1);
+        if (degDiff > 16.0f) {
+            snprintf(race->nadiaSubtitle, sizeof(race->nadiaSubtitle), "VECTOR : CLIMB // LONG RIGHT");
+            callout = NADIA_CALLOUT_AIR_RIGHT;
+        } else if (degDiff < -16.0f) {
+            snprintf(race->nadiaSubtitle, sizeof(race->nadiaSubtitle), "VECTOR : CLIMB // LONG LEFT");
+            callout = NADIA_CALLOUT_AIR_LEFT;
+        } else {
+            snprintf(race->nadiaSubtitle, sizeof(race->nadiaSubtitle), "VECTOR : CLIMB // HIGH APEX");
+            callout = NADIA_CALLOUT_AIR_CLIMB;
+        }
+    } else {
+        // CHECKPOINT_GROUND_PYLON (Superficie)
+        snprintf(race->nadiaTitle, sizeof(race->nadiaTitle), "TARGET GATE %02d : SURFACE [PYLON]", nextIdx + 1);
+
+        bool prevWasAirGate = (nextIdx > 0 && race->checkpoints[nextIdx - 1].type == CHECKPOINT_AIR_RING);
+
+        if (prevWasAirGate && deltaY < -28.0f) {
+            snprintf(race->nadiaSubtitle, sizeof(race->nadiaSubtitle), "VECTOR : DESCENT // GROUND SHEAR");
+            callout = NADIA_CALLOUT_SURF_FLAT;
+        } else if (degDiff > 32.0f) {
+            snprintf(race->nadiaSubtitle, sizeof(race->nadiaSubtitle), "VECTOR : HARD RIGHT // AIRBRAKE APEX");
+            callout = NADIA_CALLOUT_SURF_RIGHT_HARD;
+        } else if (degDiff > 12.0f) {
+            snprintf(race->nadiaSubtitle, sizeof(race->nadiaSubtitle), "VECTOR : LONG RIGHT // BANK ANGLE");
+            callout = NADIA_CALLOUT_SURF_RIGHT_LONG;
+        } else if (degDiff < -32.0f) {
+            snprintf(race->nadiaSubtitle, sizeof(race->nadiaSubtitle), "VECTOR : HARD LEFT // AIRBRAKE APEX");
+            callout = NADIA_CALLOUT_SURF_LEFT_HARD;
+        } else if (degDiff < -12.0f) {
+            snprintf(race->nadiaSubtitle, sizeof(race->nadiaSubtitle), "VECTOR : LONG LEFT // BANK ANGLE");
+            callout = NADIA_CALLOUT_SURF_LEFT_LONG;
+        } else {
+            snprintf(race->nadiaSubtitle, sizeof(race->nadiaSubtitle), "VECTOR : STRAIGHT // FLAT OUT");
+            callout = NADIA_CALLOUT_SURF_FLAT;
+        }
+    }
+
+    race->nadiaActive = true;
+    race->nadiaTimer = 2.8f;
+    race->nadiaMaxDuration = 2.8f;
+
+    Audio_PlayNadia(callout);
+}
+
+void Nadia_TriggerStallWarning(RaceTrack *race) {
+    if (!race || race->isFinished || race->isCountdown) return;
+    if (race->nadiaWarnCooldown > 0.0f) return;
+    if (Audio_IsNadiaPlaying()) return;
+
+    race->nadiaActive = true;
+    race->nadiaTimer = 2.4f;
+    race->nadiaMaxDuration = 2.4f;
+    race->nadiaWarnCooldown = 8.0f; // Cooldown para no saturar
+
+    snprintf(race->nadiaTitle, sizeof(race->nadiaTitle), "SYSTEM ALERT : KINETIC ENERGY");
+    snprintf(race->nadiaSubtitle, sizeof(race->nadiaSubtitle), "CAUTION : AIRFLOW COMPRESSION CRITICAL");
+    snprintf(race->nadiaDistance, sizeof(race->nadiaDistance), "STALL");
+
+    Audio_PlayNadia(NADIA_CALLOUT_WARN_KE);
+}
+
 void Race_Update(RaceTrack *race, PlayerJet *player, float dt) {
     if (race->feedbackTimer > 0.0f) race->feedbackTimer -= dt;
 
@@ -203,6 +327,7 @@ void Race_Update(RaceTrack *race, PlayerJet *player, float dt) {
             race->isStarted = true;
             Audio_PlayCountdownStage(0); // Voice_go!
             Music_TriggerDucking(1.2f);
+            Nadia_TriggerGateCallout(race, player, 0); // Anuncio de primera puerta
         }
         return;
     }
@@ -254,7 +379,7 @@ void Race_Update(RaceTrack *race, PlayerJet *player, float dt) {
                     const char *rank = "RANK S [ACE PILOT]";
                     if (race->finishTotalTime > 120.0f) rank = "RANK B [QUALIFIED PILOT]";
                     else if (race->finishTotalTime > 100.0f) rank = "RANK A [VETERAN PILOT]";
-                    Records_InsertScore(race->currentBiome, race->qualifyingRank, race->pilotTag, race->finishTotalTime, race->maxSpeedKmh, rank);
+                    Records_InsertScore(race->currentBiome, race->qualifyingRank, race->pilotTag, race->finishTotalTime, race->maxSpeedKmh, rank, race->runSeed);
                     race->nameEntered = true;
                 }
             }
@@ -264,10 +389,41 @@ void Race_Update(RaceTrack *race, PlayerJet *player, float dt) {
 
     race->raceTimer += dt;
 
+    // Actualización de temporizadores N.A.D.I.A. (acoplado a la cola de audio)
+    if (race->nadiaTimer > 0.0f) {
+        race->nadiaTimer -= dt;
+        if (race->nadiaTimer <= 0.0f) {
+            race->nadiaActive = false;
+        }
+    }
+    // Si Nadia sigue hablando por radio o hay mensajes encolados, mantener widget vivo
+    if (Audio_IsNadiaPlaying() || Audio_GetNadiaQueueCount() > 0) {
+        race->nadiaActive = true;
+        if (race->nadiaTimer < 0.65f) race->nadiaTimer = 0.65f;
+    }
+    if (race->nadiaWarnCooldown > 0.0f) {
+        race->nadiaWarnCooldown -= dt;
+    }
+
     if (player) {
         if (player->speedKmh > race->maxSpeedKmh) race->maxSpeedKmh = player->speedKmh;
         if (player->speedKnots > race->maxSpeedKnots) race->maxSpeedKnots = player->speedKnots;
         if (player->machNumber > race->maxMach) race->maxMach = player->machNumber;
+
+        // Actualizar distancia en tiempo real dentro del cartelito de N.A.D.I.A.
+        if (race->nadiaActive && race->currentCheckpoint < race->totalCheckpoints) {
+            float dGate = Vector3Distance(player->position, race->checkpoints[race->currentCheckpoint].position);
+            if (dGate >= 1000.0f) {
+                snprintf(race->nadiaDistance, sizeof(race->nadiaDistance), "%.1f KM", dGate * 0.001f);
+            } else {
+                snprintf(race->nadiaDistance, sizeof(race->nadiaDistance), "%.0f M", dGate);
+            }
+        }
+
+        // Alerta de pérdida de energía cinética (Stall)
+        if (player->isStalling && !race->isFinished && !race->isCountdown) {
+            Nadia_TriggerStallWarning(race);
+        }
     }
 
     if (race->currentCheckpoint >= race->totalCheckpoints) {
@@ -355,18 +511,21 @@ void Race_Update(RaceTrack *race, PlayerJet *player, float dt) {
             race->lastPassedGate = race->currentCheckpoint + 1;
             race->currentCheckpoint++;
 
-            // Recarga instantÃ¡nea por paso perfecto (+25% Boost, +35 KE)
+            // Recarga instantánea por paso perfecto (+25% Boost, +52.5 KE, +50%)
             if (isPerfectPass) {
                 player->boostEnergy = Clamp(player->boostEnergy + BOOST_PERFECT_GATE_BONUS, 0.0f, player->maxBoostEnergy);
-                player->kineticEnergy = Clamp(player->kineticEnergy + 35.0f, 0.0f, player->maxKineticEnergy);
+                player->kineticEnergy = Clamp(player->kineticEnergy + 52.5f, 0.0f, player->maxKineticEnergy);
                 player->perfectGateTimer = 2.0f;
                 Audio_PlayPerfectGate();
+                Audio_PlayNadia(NADIA_CALLOUT_PERFECT_GATE);
             } else {
                 Audio_PlayCheckpoint();
             }
 
             if (race->currentCheckpoint >= race->totalCheckpoints) {
                 Race_OnFinish(race, player);
+            } else {
+                Nadia_TriggerGateCallout(race, player, race->currentCheckpoint);
             }
         } else {
             // Pasó fuera del marco: Missed Gate con penalización de +5s
@@ -381,6 +540,8 @@ void Race_Update(RaceTrack *race, PlayerJet *player, float dt) {
 
             if (race->currentCheckpoint >= race->totalCheckpoints) {
                 Race_OnFinish(race, player);
+            } else {
+                Nadia_TriggerGateCallout(race, player, race->currentCheckpoint);
             }
         }
     }
@@ -411,7 +572,7 @@ void Race_Update(RaceTrack *race, PlayerJet *player, float dt) {
         float dz = player->position.z - closeZ;
         float distFromTrack = sqrtf(dx * dx + dz * dz);
 
-        const float OOB_RADIUS = 1200.0f;
+        const float OOB_RADIUS = 4800.0f; // Distancia de teleport fuera de pista ampliada en un 200% (era 2400m)
         const float OOB_GRACE = 5.0f;
 
         if (distFromTrack > OOB_RADIUS) {
@@ -526,12 +687,13 @@ void Race_Draw3D(const RaceTrack *race, const Camera3D *camera) {
     for (int i = 0; i < race->totalCheckpoints; i++) {
         const RaceCheckpoint *cp = &race->checkpoints[i];
         float dist = Vector3Distance(camera->position, cp->position);
-        if (dist > 4500.0f) continue;
+        if (dist > 14000.0f) continue;
 
         bool isActive = (i == race->currentCheckpoint);
         bool isPassed = cp->isPassed;
 
-        float rawFog = Clamp((dist - fogStart) / (fogEnd - fogStart), 0.0f, 1.0f);
+        float drawFogEnd = (fogEnd < 3000.0f) ? 4800.0f : fogEnd;
+        float rawFog = Clamp((dist - fogStart) / (drawFogEnd - fogStart), 0.0f, 1.0f);
         float fogFactor = rawFog * rawFog * (3.0f - 2.0f * rawFog);
 
         Color gateTint = isPassed ? (Color){ 160, 230, 180, 200 } : WHITE;
@@ -559,8 +721,10 @@ void Race_Draw3D(const RaceTrack *race, const Camera3D *camera) {
             pRight.y = groundR + pylonDrawH * 0.5f;
 
             if (race->texPylon.id != 0) {
+                if (race->billboardShader.id != 0) BeginShaderMode(race->billboardShader);
                 DrawBillboard(*camera, race->texPylon, pLeft, pylonDrawH, gateTint);
                 DrawBillboard(*camera, race->texPylon, pRight, pylonDrawH, gateTint);
+                if (race->billboardShader.id != 0) EndShaderMode();
             }
 
             if (isActive) {
@@ -574,7 +738,9 @@ void Race_Draw3D(const RaceTrack *race, const Camera3D *camera) {
         } else if (cp->type == CHECKPOINT_AIR_RING) {
             float ringDrawSize = cp->width;
             if (race->texRing.id != 0) {
+                if (race->billboardShader.id != 0) BeginShaderMode(race->billboardShader);
                 DrawBillboard(*camera, race->texRing, cp->position, ringDrawSize, gateTint);
+                if (race->billboardShader.id != 0) EndShaderMode();
             }
 
             if (isActive) {
@@ -694,6 +860,109 @@ void Race_DrawHUD(const RaceTrack *race, const PlayerJet *player, const Camera3D
         }
     }
 
+    // ========================================================================
+    // 6. WIDGET DE AVIONICA Y COPILOTO N.A.D.I.A. (RÉSEAU-ORBITAL // 108.4 MHz)
+    // ========================================================================
+    if (Audio_IsNadiaEnabled() && race->nadiaActive && race->nadiaTimer > 0.0f && !race->isFinished) {
+        float alpha = 1.0f;
+        if (race->nadiaTimer < 0.35f) alpha = race->nadiaTimer / 0.35f;
+        else if (race->nadiaTimer > race->nadiaMaxDuration - 0.25f) alpha = (race->nadiaMaxDuration - race->nadiaTimer) / 0.25f;
+        alpha = Clamp(alpha, 0.0f, 1.0f);
+
+        // Medir dimensiones del texto para garantizar que NUNCA se salga del marco ni solape con el badge de distancia
+        Vector2 tSz = UI_MeasureTextTitle(race->nadiaTitle, 11.5f);
+        Vector2 sSz = UI_MeasureTextMenu(race->nadiaSubtitle, 10.5f);
+        Vector2 dSz = UI_MeasureTextHud(race->nadiaDistance, 11.0f);
+        int distW = (int)dSz.x + 18;
+        float maxTextW = fmaxf(tSz.x, sSz.x);
+
+        int textXOffset = 78;
+        int minRequiredW = (int)((float)textXOffset + maxTextW + (float)distW + 36.0f);
+        int boxW = (int)fmaxf((float)minRequiredW, 560.0f);
+        if (boxW > (int)((float)screenWidth * 0.75f)) {
+            boxW = (int)((float)screenWidth * 0.75f);
+        }
+        int boxH = 56;
+        int baseBoxX = (int)fmaxf(36.0f, (float)screenWidth * 0.035f);
+        float slide = (1.0f - alpha) * -20.0f;
+        int boxX = (int)((float)baseBoxX + slide);
+        int boxY = 88; // Ubicado con margen de respiración bajo el banner OSD de audio
+
+        Rectangle nRec = { (float)boxX, (float)boxY, (float)boxW, (float)boxH };
+
+        // 1. Sombra suave de elevación
+        DrawRectangleRounded((Rectangle){ nRec.x, nRec.y + 3, nRec.width, nRec.height }, 0.18f, 4, (Color){ 0, 4, 10, (unsigned char)(110 * alpha) });
+
+        // 2. Cuerpo Glassy oscuro de obsidiana
+        Color glassBg = (Color){ 6, 14, 26, (unsigned char)(215 * alpha) };
+        DrawRectangleRounded(nRec, 0.18f, 4, glassBg);
+
+        // 3. Brillo especular superior de vidrio líquido
+        DrawRectangleGradientV((int)nRec.x + 2, (int)nRec.y + 1, (int)nRec.width - 4, 24,
+                               (Color){ 255, 255, 255, (unsigned char)(32 * alpha) },
+                               (Color){ 255, 255, 255, 0 });
+        DrawLine((int)nRec.x + 8, (int)nRec.y, (int)(nRec.x + nRec.width - 8), (int)nRec.y, (Color){ 255, 255, 255, (unsigned char)(90 * alpha) });
+
+        // 4. Borde esmerilado con acento Réseau-Orbital Magenta
+        Color borderCol = (Color){ 255, 0, 127, (unsigned char)(165 * alpha) };
+        DrawRectangleRoundedLinesEx(nRec, 0.18f, 4, 1.0f, borderCol);
+
+        // 5. Píldora de Título de la Transmisión
+        int tabW = 244;
+        int tabH = 17;
+        Rectangle tabRec = { nRec.x + 14, nRec.y - 8, (float)tabW, (float)tabH };
+        DrawRectangleRounded(tabRec, 0.35f, 4, (Color){ 14, 24, 42, (unsigned char)(240 * alpha) });
+        DrawRectangleRoundedLinesEx(tabRec, 0.35f, 4, 1.0f, (Color){ 255, 0, 127, (unsigned char)(180 * alpha) });
+
+        // Dot de transmisión activa (pulsa con el tiempo)
+        float pulse = sinf((float)GetTime() * 12.0f) * 0.5f + 0.5f;
+        Color dotCol = (Color){ 255, 0, 127, (unsigned char)((160 + 95 * pulse) * alpha) };
+        DrawCircle((int)tabRec.x + 9, (int)tabRec.y + 8, 3.2f, dotCol);
+
+        UI_DrawTextHud("RESEAU-ORBITAL // N.A.D.I.A. 108.4MHz", tabRec.x + 18, tabRec.y + 3, 9.5f, (Color){ 225, 245, 255, (unsigned char)(245 * alpha) });
+
+        // 6. Avatar Vectorial de N.A.D.I.A. (Órbita e Icono)
+        int iconCenterX = (int)nRec.x + 28;
+        int iconCenterY = (int)nRec.y + 30;
+
+        // Anillo de órbita giratorio
+        float orbitAngle = (float)GetTime() * 2.8f;
+        DrawCircleLines(iconCenterX, iconCenterY, 13.0f, (Color){ 45, 95, 145, (unsigned char)(140 * alpha) });
+        Vector2 satPos = {
+            (float)iconCenterX + cosf(orbitAngle) * 13.0f,
+            (float)iconCenterY + sinf(orbitAngle) * 6.5f
+        };
+        DrawCircleV(satPos, 2.5f, (Color){ 255, 0, 127, (unsigned char)(255 * alpha) });
+        DrawCircle(iconCenterX, iconCenterY, 3.5f, (Color){ 0, 240, 255, (unsigned char)(220 * alpha) });
+
+        // 4 Barras de Audio Equalizer oscilando en tiempo real
+        int eqStartX = iconCenterX + 22;
+        int eqBaseY = iconCenterY + 10;
+        for (int b = 0; b < 4; b++) {
+            float barVal = sinf((float)GetTime() * 22.0f + (float)b * 1.6f) * 0.5f + 0.5f;
+            int barH = 4 + (int)(barVal * 15.0f);
+            DrawRectangle(eqStartX + b * 5, eqBaseY - barH, 3, barH, (Color){ 0, 240, 255, (unsigned char)(190 * alpha) });
+        }
+
+        // 7. Texto de Telemetría Táctica
+        int textX = (int)nRec.x + textXOffset;
+        int line1Y = (int)nRec.y + 13;
+        int line2Y = (int)nRec.y + 32;
+
+        UI_DrawTextTitle(race->nadiaTitle, (float)textX, (float)line1Y, 11.5f, (Color){ 240, 248, 255, (unsigned char)(255 * alpha) });
+        UI_DrawTextMenu(race->nadiaSubtitle, (float)textX, (float)line2Y, 10.5f, (Color){ 0, 240, 255, (unsigned char)(235 * alpha) });
+
+        // 8. Distancia / ETA a la derecha (sin colisión)
+        int distH = 20;
+        int distX = (int)(nRec.x + nRec.width - distW - 14);
+        int distY = (int)nRec.y + 18;
+
+        Rectangle distRec = { (float)distX, (float)distY, (float)distW, (float)distH };
+        DrawRectangleRounded(distRec, 0.30f, 4, (Color){ 10, 22, 38, (unsigned char)(190 * alpha) });
+        DrawRectangleRoundedLinesEx(distRec, 0.30f, 4, 1.0f, (Color){ 255, 185, 45, (unsigned char)(160 * alpha) });
+        UI_DrawTextHud(race->nadiaDistance, (float)(distX + 9), (float)(distY + 4), 11.0f, (Color){ 255, 195, 60, (unsigned char)(255 * alpha) });
+    }
+
     // 5. Pantalla de resultados al finalizar
     if (race->isFinished) {
         DrawRectangle(0, 0, screenWidth, screenHeight, (Color){ 2, 4, 8, 225 });
@@ -706,6 +975,7 @@ void Race_DrawHUD(const RaceTrack *race, const PlayerJet *player, const Camera3D
 
         UI_DrawGlassPanel(debriefRec, "HCRB RACE DEBRIEFING", UI_COLOR_AC4_CYAN, UI_COLOR_PANEL_BG);
         UI_DrawTextTitle("SORTIE COMPLETE // HCRB RECORD", (float)(cardX + 35), (float)(cardY + 26), 18.0f, UI_COLOR_STEEL_WHITE);
+        UI_DrawTextHud(TextFormat("CIRCUIT SEED : %06u", race->runSeed), (float)(cardX + cardW - 220), (float)(cardY + 28), 12.0f, UI_COLOR_AC4_CYAN);
         DrawLine(cardX + 35, cardY + 52, cardX + cardW - 35, cardY + 52, (Color){ 35, 70, 95, 140 });
 
         UI_DrawTextMenu("TOTAL RACE DURATION:", (float)(cardX + 35), (float)(cardY + 66), 11.0f, UI_COLOR_MUTED_TEXT);
@@ -732,15 +1002,16 @@ void Race_DrawHUD(const RaceTrack *race, const PlayerJet *player, const Camera3D
         }
 
         int nextStatsY = (race->isNewRecord || race->qualifyingRank >= 0) ? 164 : 144;
-        UI_DrawTextMenu(TextFormat("CHECKPOINTS CLEARED:    %02d / %02d", race->totalCheckpoints, race->totalCheckpoints), (float)(cardX + 35), (float)(cardY + nextStatsY), 13.0f, UI_COLOR_STEEL_WHITE);
-        UI_DrawTextMenu(TextFormat("VEL MAX:                %04d KM/H (MACH %.2f)", (int)race->maxSpeedKmh, race->maxMach), (float)(cardX + 35), (float)(cardY + nextStatsY + 24), 13.0f, UI_COLOR_STEEL_WHITE);
+        UI_DrawTextMenu(TextFormat("CHECKPOINTS CLEARED:    %02d / %02d", race->totalCheckpoints, race->totalCheckpoints), (float)(cardX + 35), (float)(cardY + nextStatsY), 12.0f, UI_COLOR_STEEL_WHITE);
+        UI_DrawTextMenu(TextFormat("VEL MAX:                %04d KM/H (MACH %.2f)", (int)race->maxSpeedKmh, race->maxMach), (float)(cardX + 35), (float)(cardY + nextStatsY + 20), 12.0f, UI_COLOR_STEEL_WHITE);
+        UI_DrawTextMenu(TextFormat("MISSION SEED CODE:      %06u", race->runSeed), (float)(cardX + 35), (float)(cardY + nextStatsY + 40), 12.0f, UI_COLOR_AC4_CYAN);
 
         const char *rank = "PILOT EVALUATION:  RANK S [ACE PILOT]";
         Color rankCol = UI_COLOR_AC4_GREEN;
         if (race->finishTotalTime > 120.0f) { rank = "PILOT EVALUATION:  RANK B [QUALIFIED PILOT]"; rankCol = UI_COLOR_AC4_AMBER; }
         else if (race->finishTotalTime > 100.0f) { rank = "PILOT EVALUATION:  RANK A [VETERAN PILOT]"; rankCol = UI_COLOR_AC4_CYAN; }
 
-        UI_DrawTextTitle(rank, (float)(cardX + 35), (float)(cardY + nextStatsY + 58), 15.0f, rankCol);
+        UI_DrawTextTitle(rank, (float)(cardX + 35), (float)(cardY + nextStatsY + 62), 14.0f, rankCol);
         DrawLine(cardX + 35, cardY + cardH - 50, cardX + cardW - 35, cardY + cardH - 50, (Color){ 35, 70, 95, 140 });
 
         // Caja de entrada de iniciales si clasificó en el Top 5
@@ -789,6 +1060,10 @@ void Race_DrawHUD(const RaceTrack *race, const PlayerJet *player, const Camera3D
 }
 
 void Race_Unload(RaceTrack *race) {
+    if (race->billboardShader.id != 0) {
+        UnloadShader(race->billboardShader);
+        race->billboardShader.id = 0;
+    }
     if (race->isTexturesLoaded) {
         if (race->texPylon.id != 0) UnloadTexture(race->texPylon);
         if (race->texRing.id != 0)  UnloadTexture(race->texRing);

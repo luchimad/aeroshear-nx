@@ -63,15 +63,29 @@ typedef struct RaceTrack {
     float maxSpeedKnots;
     float maxMach;
 
+    // Sistema Copiloto N.A.D.I.A. // Réseau-Orbital Avionics
+    bool nadiaActive;
+    float nadiaTimer;
+    float nadiaMaxDuration;
+    char nadiaTitle[64];
+    char nadiaSubtitle[64];
+    char nadiaDistance[32];
+    float nadiaWarnCooldown;
+
     Texture2D texPylon;
     Texture2D texRing;
+    Shader billboardShader;
     bool isTexturesLoaded;
+    unsigned int runSeed;
 } RaceTrack;
 
-void Race_Init(RaceTrack *race, BiomeType biome, Vector3 *startPlayerPos, float *startYaw);
+void Race_Init(RaceTrack *race, BiomeType biome, unsigned int seed, Vector3 *startPlayerPos, float *startYaw);
 void Race_Update(RaceTrack *race, PlayerJet *player, float dt);
 void Race_Draw3D(const RaceTrack *race, const Camera3D *camera);
 void Race_DrawHUD(const RaceTrack *race, const PlayerJet *player, const Camera3D *camera, int screenWidth, int screenHeight);
 void Race_Unload(RaceTrack *race);
+
+void Nadia_TriggerGateCallout(RaceTrack *race, const PlayerJet *player, int nextIdx);
+void Nadia_TriggerStallWarning(RaceTrack *race);
 
 #endif // RACE_H

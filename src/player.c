@@ -19,10 +19,10 @@ void Player_ApplyAircraft(PlayerJet *player, const AircraftDefinition *aircraft)
     player->climbRate = aircraft->climbRate;
     player->baseScale = (aircraft->baseScale > 0.01f) ? aircraft->baseScale : SPRITE_BASE_SCALE;
 
-    player->maxKineticEnergy = (aircraft->kineticCapacity > 10.0f) ? aircraft->kineticCapacity : 300.0f;
+    player->maxKineticEnergy = (aircraft->kineticCapacity > 10.0f) ? aircraft->kineticCapacity : 450.0f;
     player->kineticEfficiency = (aircraft->kineticEfficiency > 0.1f) ? aircraft->kineticEfficiency : 1.0f;
-    player->hoverHeight = (aircraft->hoverHeight > 2.0f) ? aircraft->hoverHeight : 12.5f;
-    player->climbCeiling = (aircraft->climbCeiling > 50.0f) ? aircraft->climbCeiling : 225.0f;
+    player->hoverHeight = (aircraft->hoverHeight > 2.0f) ? aircraft->hoverHeight : 10.0f;
+    player->climbCeiling = (aircraft->climbCeiling > 50.0f) ? aircraft->climbCeiling : 292.5f;
     player->kineticEnergy = player->maxKineticEnergy;
 
     player->forwardSpeed = player->cruiseSpeed;
@@ -41,13 +41,14 @@ void Player_Init(PlayerJet *player) {
     const AircraftDefinition *defaultJet = Aircraft_Get(0);
     Player_ApplyAircraft(player, defaultJet);
 
-    player->hoverHeight = (player->hoverHeight > 2.0f) ? player->hoverHeight : 12.5f;
+    player->hoverHeight = (player->hoverHeight > 2.0f) ? player->hoverHeight : 10.0f;
     player->verticalVelocity = 0.0f;
     player->groundEffectRatio = 1.0f;
     player->groundNormal = (Vector3){ 0.0f, 1.0f, 0.0f };
     player->kineticEnergy = player->maxKineticEnergy;
     player->isStalling = false;
     player->stallTimer = 0.0f;
+    player->wasFlying = false;
 
     float startGroundY = Terrain_GetHeight(0.0f, 0.0f);
     player->position = (Vector3){ 0.0f, startGroundY + player->hoverHeight, 0.0f };
@@ -85,9 +86,33 @@ void Player_Init(PlayerJet *player) {
 
     player->screenOffset = (Vector2){ 0.0f, 0.0f };
     player->targetScreenOffset = (Vector2){ 0.0f, 0.0f };
+
+    player->hullIntegrity = PLAYER_MAX_HULL;
+    player->maxHullIntegrity = PLAYER_MAX_HULL;
+    player->isDead = false;
+    player->deathTimer = 0.0f;
+    player->damageFlashTimer = 0.0f;
+    player->alertTimer = 0.0f;
+    player->lastAlertText[0] = '\0';
+    player->fatalReason = "";
+    player->deathQuoteIndex = 0;
 }
 
 void Player_Update(PlayerJet *player, const GameSettings *settings, float dt) {
+    if (player->isDead) {
+        player->deathTimer += dt;
+        return;
+    }
+
+    if (player->damageFlashTimer > 0.0f) {
+        player->damageFlashTimer -= dt;
+        if (player->damageFlashTimer < 0.0f) player->damageFlashTimer = 0.0f;
+    }
+    if (player->alertTimer > 0.0f) {
+        player->alertTimer -= dt;
+        if (player->alertTimer < 0.0f) player->alertTimer = 0.0f;
+    }
+
     player->prevPosition = player->position;
 
     // ========================================================================
@@ -192,6 +217,9 @@ void Player_Update(PlayerJet *player, const GameSettings *settings, float dt) {
     player->screenOffset.x = Lerp(player->screenOffset.x, player->targetScreenOffset.x, dt * 5.5f);
     player->screenOffset.y = Lerp(player->screenOffset.y, player->targetScreenOffset.y, dt * 5.5f);
 
+    bool isClimbing = (pitchInput > 0.05f);
+    bool isDiving = (pitchInput < -0.05f);
+
     // ========================================================================
     // 2. SISTEMA DE PROPULSIÓN & AFTERBURNER SLINGSHOT
     // ========================================================================
@@ -230,7 +258,13 @@ void Player_Update(PlayerJet *player, const GameSettings *settings, float dt) {
             float excess = player->forwardSpeed - player->cruiseSpeed;
             player->forwardSpeed -= excess * 0.30f * dt;
         } else {
-            player->forwardSpeed = Lerp(player->forwardSpeed, player->cruiseSpeed, dt * (player->acceleration * 0.65f));
+            // Recuperación hacia velocidad crucero
+            // Si está trepando o en pérdida, el empuje pasivo no anula la pérdida de velocidad
+            if (!isClimbing && !player->isStalling) {
+                // Estando en tierra (colchón rasante <= 20m), la recuperación es un poco más del doble más lenta (x0.25 vs x0.65)
+                float recoveryMult = (player->altitudeAGL <= 20.0f) ? 0.25f : 0.65f;
+                player->forwardSpeed = Lerp(player->forwardSpeed, player->cruiseSpeed, dt * (player->acceleration * recoveryMult));
+            }
         }
     }
 
@@ -275,10 +309,11 @@ void Player_Update(PlayerJet *player, const GameSettings *settings, float dt) {
     float targetHoverY = anticipatedGround + hCushion;
     float currentAGL = player->position.y - groundCurrent;
 
-    // --- RECARGA POR RIESGO 1: COLCHÓN GROUND-SHEAR (< 18m AGL) ---
-    if (currentAGL < hCushion + 6.0f) {
+    // --- RECARGA POR RIESGO 1: COLCHÓN GROUND-SHEAR (colchón a 10m, recarga de KE hasta 20m AGL) ---
+    const float KE_RECHARGE_AGL_CEILING = 20.0f;
+    if (currentAGL <= KE_RECHARGE_AGL_CEILING) {
         player->inGroundShear = true;
-        float compression = Clamp(1.0f - (currentAGL - hCushion) / 6.0f, 0.0f, 1.0f);
+        float compression = Clamp(1.0f - (currentAGL - hCushion) / (KE_RECHARGE_AGL_CEILING - hCushion), 0.0f, 1.0f);
         player->kineticEnergy += KE_RECHARGE_SHEAR * compression * dt;
 
         if (!player->isAirbrake) {
@@ -296,47 +331,98 @@ void Player_Update(PlayerJet *player, const GameSettings *settings, float dt) {
         player->kineticEnergy += KE_RECHARGE_APEX * (turnStress - 0.35f) * dt;
     }
 
-    // --- CONSUMO ACTIVO POR TREPADA ---
-    bool isClimbing = (pitchInput > 0.05f);
-    if (isClimbing) {
-        player->kineticEnergy -= KE_DRAIN_CLIMB * pitchInput * dt;
+    // --- CONSUMO DE KE (SOLO CUANDO SE VUELA POR ENCIMA DEL COLCHÓN DE 20m) ---
+    if (currentAGL > 20.0f) {
+        // Vuelo fuera de efecto suelo: consumo progresivo (+50% de duración)
+        float altExcess = currentAGL - 20.0f;
+        player->kineticEnergy -= (21.0f + altExcess * 0.16f) * dt;
+
+        // Consumo adicional activo por trepada
+        if (isClimbing) {
+            player->kineticEnergy -= KE_DRAIN_CLIMB * pitchInput * dt;
+        }
     }
 
     player->kineticEnergy = Clamp(player->kineticEnergy, 0.0f, player->maxKineticEnergy);
     player->isStalling = (player->kineticEnergy < 15.0f);
 
+    // --- PÉRDIDA DE VELOCIDAD POR TREPADA Y PÉRDIDA (STALL) ---
+    if (isClimbing) {
+        // Al trepar se sangra velocidad de avance (pérdida de inercia hacia adelante)
+        float climbDrag = 150.0f * pitchInput * dt;
+        player->forwardSpeed -= climbDrag;
+    }
+    if (player->isStalling) {
+        // En pérdida se sangra velocidad un 150% más rápido que trepando (375 m/s² = 150 + 150%)
+        float stallDrag = 375.0f * dt;
+        player->forwardSpeed -= stallDrag;
+    }
+    float minFlightSpeed = player->cruiseSpeed * 0.35f;
+    if (player->forwardSpeed < minFlightSpeed) player->forwardSpeed = minFlightSpeed;
+
+    // Detección de vuelo a altitud ("estuviste volando")
+    // Se activa al elevarse sobre el colchón rasante (> 22m AGL)
+    if (currentAGL > 22.0f) {
+        player->wasFlying = true;
+    } else if (currentAGL <= 11.5f) {
+        // Al estabilizarse en el colchón inferior rasante, se consume el potencial de vuelo
+        player->wasFlying = false;
+    }
+
     // ========================================================================
-    // 4. PICADA AGRESIVA Y ACELERADA (SOLUCIÓN BUG PICADA / DIVE ACCELERATION)
+    // 4. PICADA AGRESIVA Y TREPADA SUAVIZADA (-40% VIOLENCIA, +CONTROL ABAJO)
     // ========================================================================
-    bool isDiving = (pitchInput < -0.05f);
     if (isDiving) {
         float diveMag = fabsf(pitchInput);
-        // Aceleración descendente contundente (hasta -95 m/s)
+        // Aceleración descendente contundente y con control inmediato (hasta -140 m/s)
         float targetSink = -DIVE_MAX_SINK_RATE * diveMag;
-        player->verticalVelocity = Lerp(player->verticalVelocity, targetSink, dt * 5.5f);
+        player->verticalVelocity = Lerp(player->verticalVelocity, targetSink, dt * 11.0f);
 
-        // Slingshot gravitatorio: convierte altitud en velocidad de avance horizontal
-        float diveSpeedBoost = DIVE_SPEED_CONVERSION * diveMag * dt;
-        player->forwardSpeed += diveSpeedBoost;
-        float maxDiveSpeed = player->afterburnerSpeed * 1.15f;
-        if (player->forwardSpeed > maxDiveSpeed) player->forwardSpeed = maxDiveSpeed;
+        // SOLO si estuviste volando se recupera velocidad y KE por picada gravitatoria
+        if (player->wasFlying && currentAGL > 11.0f) {
+            float altFactor = Clamp((currentAGL - 10.0f) / 25.0f, 0.35f, 1.0f);
+            float diveSpeedBoost = DIVE_SPEED_CONVERSION * diveMag * altFactor * dt;
+            player->forwardSpeed += diveSpeedBoost;
+            float maxDiveSpeed = player->afterburnerSpeed * 1.15f;
+            if (player->forwardSpeed > maxDiveSpeed) player->forwardSpeed = maxDiveSpeed;
 
-        // Recarga de Boost y KE por compresión dinámica
-        player->boostEnergy += 35.0f * diveMag * dt;
-        player->kineticEnergy += KE_RECHARGE_DIVE * diveMag * dt;
+            // Recarga de Boost y KE al convertir energía potencial de altitud
+            player->boostEnergy += 35.0f * diveMag * altFactor * dt;
+            player->kineticEnergy += KE_RECHARGE_DIVE * diveMag * altFactor * dt;
+        }
     } else if (isClimbing && player->kineticEnergy > 0.0f) {
-        // Trepada activa suave impulsada por KE
-        float climbPower = player->climbRate * 0.50f * (player->kineticEnergy / player->maxKineticEnergy);
-        player->verticalVelocity = Lerp(player->verticalVelocity, climbPower, dt * 5.0f);
+        // Trepada activa: violencia reducida en un 40% (potencia x0.60 y Lerp 8.5f), manteniendo relación con velocidad
+        float speedRatio = player->forwardSpeed / player->cruiseSpeed;
+        if (speedRatio < 0.35f) speedRatio = 0.35f;
+        float aeroLiftMult = 0.75f + 1.25f * (speedRatio * speedRatio);
+        float keRatio = (player->maxKineticEnergy > 0.0f) ? (player->kineticEnergy / player->maxKineticEnergy) : 1.0f;
+        float climbPower = (player->climbRate * 0.60f) * aeroLiftMult * (0.65f + 0.35f * keRatio) * pitchInput;
+
+        // Respuesta más controlada y menos violenta (-40% violencia, Lerp 8.5f)
+        player->verticalVelocity = Lerp(player->verticalVelocity, climbPower, dt * 8.5f);
     } else {
-        // Sin entrada vertical: seguimiento de colchón
+        // Sin entrada vertical activa (se soltó la palanca/tecla de morro)
         float heightError = targetHoverY - player->position.y;
-        if (heightError > 0.0f) {
-            player->verticalVelocity = Lerp(player->verticalVelocity, heightError * 5.2f, dt * 6.5f);
+
+        if (heightError > -3.5f) {
+            // Proximidad o contacto con el colchón de levitación (< 13.5m AGL): estabilizar en el colchón
+            float cushionTarget = (heightError > 0.0f) ? (heightError * 5.5f) : (heightError * 4.5f);
+            player->verticalVelocity = Lerp(player->verticalVelocity, cushionTarget, dt * 7.0f);
         } else {
-            float dropSpeed = heightError * 2.8f;
-            if (player->isStalling) dropSpeed = -22.0f;
-            player->verticalVelocity = Lerp(player->verticalVelocity, dropSpeed, dt * 4.5f);
+            // En vuelo libre alto: la gravedad tira hacia abajo un 50% más rápido para menor planeo
+            if (player->isStalling) {
+                // Pérdida aerodinámica: caída gravitatoria pesada hacia el suelo
+                float stallDropSpeed = -48.0f;
+                player->verticalVelocity = Lerp(player->verticalVelocity, stallDropSpeed, dt * 4.2f);
+            } else {
+                // Planeo con menor sustentación (+50% velocidad de caída):
+                // Tasa de descenso entre -14.25 m/s y -24.0 m/s según velocidad horizontal
+                float speedRatio = Clamp(player->forwardSpeed / player->cruiseSpeed, 0.35f, 1.30f);
+                float naturalGlideSink = Lerp(-84.0f, -70.25f, (speedRatio - 0.35f) / 0.95f);
+
+                // Transición un 50% más rápida hacia la caída bajo gravedad
+                player->verticalVelocity = Lerp(player->verticalVelocity, naturalGlideSink, dt * 6.0f);
+            }
         }
     }
 
@@ -350,8 +436,8 @@ void Player_Update(PlayerJet *player, const GameSettings *settings, float dt) {
 
     player->position.y += player->verticalVelocity * dt;
 
-    // Piso de seguridad elástico suave
-    const float MIN_FLOOR = 8.5f;
+    // Piso de seguridad elástico suave adaptado al colchón de 10m
+    const float MIN_FLOOR = 4.0f;
     float minFloorY = groundCurrent + MIN_FLOOR;
     if (player->position.y < minFloorY) {
         player->position.y = Lerp(player->position.y, minFloorY, dt * 22.0f);
@@ -423,6 +509,7 @@ void Player_Update(PlayerJet *player, const GameSettings *settings, float dt) {
 // ============================================================================
 void DrawPlayerSprite(const PlayerJet *player, const SpriteSheet *sheet, const Camera3D *camera, int viewWidth, int viewHeight) {
     if (!sheet || !sheet->isLoaded) return;
+    if (player->isDead) return;
     if (viewWidth <= 0) viewWidth = 1280;
     if (viewHeight <= 0) viewHeight = 720;
 
@@ -482,5 +569,10 @@ void DrawPlayerSprite(const PlayerJet *player, const SpriteSheet *sheet, const C
     float driftTilt = Clamp(player->lateralSlip * -0.05f, -8.0f, 8.0f);
     float screenRoll = (player->inputXNorm * -12.0f) + driftTilt;
 
-    DrawTexturePro(sheet->texture, sourceRec, destRec, origin, screenRoll, WHITE);
+    Color shipTint = WHITE;
+    if (player->damageFlashTimer > 0.0f) {
+        shipTint = (Color){ 255, 60, 60, 255 };
+    }
+
+    DrawTexturePro(sheet->texture, sourceRec, destRec, origin, screenRoll, shipTint);
 }

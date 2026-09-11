@@ -113,13 +113,53 @@ static float GetHeight_Deltastraits(float worldX, float worldZ) {
     return Lerp(riverBed, islandLand, islandMask);
 }
 
+// ============================================================================
+// ZONA DE DESPEGUE // NIVELACIÓN DEL RELIEVE EN TORNO AL SPAWN
+// ============================================================================
+
+static Vector3 s_spawnPos = { 0 };
+static float s_spawnFlatRadius = 0.0f;
+static float s_spawnTargetHeight = 0.0f;
+static bool s_hasSpawnClearance = false;
+
+void Terrain_SetSpawnClearance(Vector3 spawnPos, float flatRadius) {
+    s_spawnPos = spawnPos;
+    s_spawnFlatRadius = flatRadius;
+    s_hasSpawnClearance = (flatRadius > 0.0f);
+    if (s_hasSpawnClearance) {
+        BiomeType activeBiome = Biome_GetActive();
+        if (activeBiome == BIOME_HOTSANDS) {
+            s_spawnTargetHeight = GetHeight_Hotsands(spawnPos.x, spawnPos.z);
+        } else {
+            float baseH = GetHeight_Deltastraits(spawnPos.x, spawnPos.z);
+            if (baseH < 47.0f) baseH = 47.0f; // Superficie transitable pareja por encima del agua (45m)
+            s_spawnTargetHeight = baseH;
+        }
+    }
+}
+
 // Función principal de altura consultando el bioma activo
 float Terrain_GetHeight(float worldX, float worldZ) {
     BiomeType activeBiome = Biome_GetActive();
-    if (activeBiome == BIOME_HOTSANDS) {
-        return GetHeight_Hotsands(worldX, worldZ);
+    float rawH = (activeBiome == BIOME_HOTSANDS) ? GetHeight_Hotsands(worldX, worldZ)
+                                                 : GetHeight_Deltastraits(worldX, worldZ);
+
+    if (s_hasSpawnClearance && s_spawnFlatRadius > 0.0f) {
+        float dx = worldX - s_spawnPos.x;
+        float dz = worldZ - s_spawnPos.z;
+        float distSq = dx * dx + dz * dz;
+        float rMax = s_spawnFlatRadius;
+        if (distSq < rMax * rMax) {
+            float dist = sqrtf(distSq);
+            float t = dist / rMax;
+            // Curva suave cúbica (smoothstep): en el spawn el suelo es perfectamente plano
+            // y se fusiona progresivamente con el relieve natural en el perímetro
+            float blend = t * t * (3.0f - 2.0f * t);
+            return Lerp(s_spawnTargetHeight, rawH, blend);
+        }
     }
-    return GetHeight_Deltastraits(worldX, worldZ);
+
+    return rawH;
 }
 
 // Normal aproximada mediante diferencias finitas
@@ -459,6 +499,28 @@ void Terrain_Update(TerrainSystem *terrain, Vector3 playerPos) {
     }
 }
 
+void Terrain_ForceCenter(TerrainSystem *terrain, Vector3 playerPos) {
+    int currentCenterX = (int)roundf(playerPos.x / TERRAIN_CHUNK_SIZE);
+    int currentCenterZ = (int)roundf(playerPos.z / TERRAIN_CHUNK_SIZE);
+
+    terrain->centerChunkX = currentCenterX;
+    terrain->centerChunkZ = currentCenterZ;
+
+    int halfGrid = TERRAIN_CHUNK_GRID / 2;
+    int chunkIdx = 0;
+
+    for (int gz = -halfGrid; gz <= halfGrid; gz++) {
+        for (int gx = -halfGrid; gx <= halfGrid; gx++) {
+            if (chunkIdx < TERRAIN_CHUNK_GRID * TERRAIN_CHUNK_GRID) {
+                TerrainChunk *chunk = &terrain->chunks[chunkIdx++];
+                int targetX = currentCenterX + gx;
+                int targetZ = currentCenterZ + gz;
+                UpdateChunkPositionAndMesh(chunk, TERRAIN_GRID_RES, TERRAIN_CHUNK_SIZE, targetX, targetZ, terrain->terrainShader, terrain->tex1);
+            }
+        }
+    }
+}
+
 // ============================================================================
 // RENDERIZADO DEL TERRENO Y PLANO DE AGUA
 // ============================================================================
@@ -545,4 +607,5 @@ void Terrain_Unload(TerrainSystem *terrain) {
 
     UnloadCurrentTextures(terrain);
     UnloadShader(terrain->terrainShader);
+    s_hasSpawnClearance = false;
 }

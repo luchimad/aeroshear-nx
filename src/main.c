@@ -19,6 +19,7 @@
 #include "music.h"
 #include "records.h"
 #include <stddef.h>
+#include <stdlib.h>
 #include <math.h>
 #include <string.h>
 
@@ -57,6 +58,43 @@ static PlayerJet player;
 static FlightCamera flightCamera;
 static RaceTrack race;
 
+static void StartOrRestartFlight(RaceTrack *racePtr, PlayerJet *playerPtr, FlightCamera *cameraPtr,
+                                 TerrainSystem *terrainPtr, ScenerySystem *sceneryPtr,
+                                 BiomeType biome, int aircraftIdx, const GameSettings *settings,
+                                 unsigned int seed) {
+    // 1. Establecer el bioma activo primero para que el cálculo de alturas y relieve sea 100% exacto
+    Biome_SetActive(biome);
+
+    Vector3 startPos = { 0 };
+    float startYaw = 0.0f;
+    Race_Init(racePtr, biome, seed, &startPos, &startYaw);
+
+    Player_Init(playerPtr);
+    playerPtr->runSeed = seed;
+    const AircraftDefinition *jet = Aircraft_Get(aircraftIdx);
+    Player_ApplyAircraft(playerPtr, jet);
+    Terrain_LoadBiome(terrainPtr, biome);
+    Terrain_SetRenderDistance(terrainPtr, settings->renderDistance);
+    Terrain_SetSpawnClearance(startPos, 750.0f);
+
+    Scenery_LoadBiome(sceneryPtr, biome, seed);
+    Scenery_SetTrackClearance(sceneryPtr, racePtr);
+    Scenery_SetRenderDistance(sceneryPtr, settings->renderDistance);
+
+    // Ajustar altura inicial al terreno plano recién nivelado en el spawn con colchón de 10m
+    startPos.y = Terrain_GetHeight(startPos.x, startPos.z) + 11.0f;
+
+    playerPtr->position = startPos;
+    playerPtr->heading = startYaw;
+    playerPtr->forward = (Vector3){ -sinf(startYaw), 0.0f, cosf(startYaw) };
+    playerPtr->velocity = Vector3Scale(playerPtr->forward, playerPtr->cruiseSpeed);
+    FlightCamera_Init(cameraPtr, playerPtr->position, playerPtr->forward);
+    Terrain_ForceCenter(terrainPtr, playerPtr->position);
+    Scenery_ForceCenter(sceneryPtr, playerPtr->position);
+    FX_Init();
+    Music_StartBiome(biome);
+}
+
 int main(int argc, char *argv[]) {
     bool autoCapture = false;
     for (int i = 1; i < argc; i++) {
@@ -69,7 +107,7 @@ int main(int argc, char *argv[]) {
     SetExitKey(KEY_NULL);
     SetWindowMinSize(640, 360);
     SetTargetFPS(TARGET_FPS);
-    rlSetClipPlanes(0.1, 5000.0);
+    rlSetClipPlanes(0.1, 16000.0);
 
     // 2. Inicialización de Subsistemas
     Audio_Init();
@@ -80,7 +118,7 @@ int main(int argc, char *argv[]) {
     Records_Init();
 
     Terrain_Init(&terrain);
-    Scenery_Init(&scenery);
+    Scenery_Init(&scenery, 101824u);
     Aircraft_Init();
     Player_Init(&player);
     FlightCamera_Init(&flightCamera, player.position, player.forward);
@@ -94,14 +132,21 @@ int main(int argc, char *argv[]) {
         .hudTheme = HUD_THEME_CYAN,
         .masterVolume = 1.0f,
         .musicVolume = 0.80f,
+        .voiceVolume = 0.40f, // Reducido 50%
+        .nadiaEnabled = true,
         .invertPitch = false,
         .fullscreen = false
     };
     Terrain_SetRenderDistance(&terrain, gameSettings.renderDistance);
     Audio_SetMasterVolume(gameSettings.masterVolume);
     Music_SetVolume(gameSettings.musicVolume);
-    Music_PlayMenu();
+    Audio_SetVoiceVolume(gameSettings.voiceVolume);
+    Audio_SetNadiaEnabled(gameSettings.nadiaEnabled);
     UITheme_SetHUDTheme(gameSettings.hudTheme);
+
+    // Reproducción simultánea del efecto de encendido CRT y tema exclusivo de primer booteo
+    Audio_PlayCRTPowerOn();
+    Music_PlayBootMenu();
 
     int initialW = GetScreenWidth();
     int initialH = GetScreenHeight();
@@ -127,6 +172,8 @@ int main(int argc, char *argv[]) {
     GameState gameState = GAME_STATE_MAIN_MENU;
     int selectedAircraftIdx = 0;
     BiomeType selectedBiome = BIOME_DELTASTRAITS;
+    char seedBuffer[16] = "";
+    unsigned int currentRunSeed = 101824u;
     Menu_SetSelectedBiome(selectedBiome);
 
     // 4. Bucle Principal
@@ -171,28 +218,37 @@ int main(int argc, char *argv[]) {
                 TakeScreenshot("alpha_main_menu.png");
                 gameState = GAME_STATE_RECORDS;
             }
-            if (captureFrame == 50) {
+            if (captureFrame == 45) {
                 TakeScreenshot("alpha_records.png");
-                gameState = GAME_STATE_SETTINGS;
+                selectedBiome = BIOME_HOTSANDS;
+                gameState = GAME_STATE_SEED_SELECT;
+                strcpy(seedBuffer, "519820");
             }
-            if (captureFrame == 75) {
-                TakeScreenshot("alpha_settings.png");
+            if (captureFrame == 65) {
+                TakeScreenshot("alpha_seed_menu.png");
                 gameState = GAME_STATE_PLAYING;
-                Race_Init(&race, selectedBiome, &player.position, &player.heading);
+                StartOrRestartFlight(&race, &player, &flightCamera, &terrain, &scenery, selectedBiome, selectedAircraftIdx, &gameSettings, 519820u);
                 race.isCountdown = false;
-                race.isFinished = true;
-                race.qualifyingRank = 0;
-                race.nameEntered = false;
-                race.isNewRecord = true;
-                race.maxSpeedKmh = 1940.0f;
-                race.maxMach = 1.58f;
-                race.raceTimer = 72.75f;
-                race.finishTotalTime = 72.75f;
-                strcpy(race.pilotTag, "LUC");
-                race.tagCursor = 2;
+                race.isFinished = false;
             }
-            if (captureFrame == 85) {
-                TakeScreenshot("alpha_debriefing.png");
+            if (captureFrame == 90) {
+                TakeScreenshot("alpha_desert_city.png");
+                // Cambiar a Delta Straits para verificar el agua, árboles y spawn parejo
+                StartOrRestartFlight(&race, &player, &flightCamera, &terrain, &scenery, BIOME_DELTASTRAITS, selectedAircraftIdx, &gameSettings, 777123u);
+                race.isCountdown = false;
+                race.isFinished = false;
+            }
+            if (captureFrame == 120) {
+                TakeScreenshot("alpha_delta_straits.png");
+                // Trigger death to capture Wreck Debriefing screen
+                player.hullIntegrity = 0.0f;
+                player.isDead = true;
+                player.deathTimer = 2.5f; // CRT power-on completed, Wreck Debriefing visible
+                player.fatalReason = "URBAN MONOLITH COLLAPSE";
+                player.deathQuoteIndex = 0;
+            }
+            if (captureFrame == 140) {
+                TakeScreenshot("alpha_wreck_screen.png");
                 break;
             }
         }
@@ -276,27 +332,10 @@ int main(int argc, char *argv[]) {
         // ==========================================
         else if (gameState == GAME_STATE_AIRCRAFT_SELECT) {
             MenuAction action = Menu_UpdateAircraftSelect(&selectedAircraftIdx);
-            if (action == MENU_ACTION_START_GAME) {
-                Vector3 startPos = { 0 };
-                float startYaw = 0.0f;
-
-                Race_Init(&race, selectedBiome, &startPos, &startYaw);
-
-                Player_Init(&player);
-                const AircraftDefinition *jet = Aircraft_Get(selectedAircraftIdx);
-                Player_ApplyAircraft(&player, jet);
-                Terrain_LoadBiome(&terrain, selectedBiome);
-                Terrain_SetRenderDistance(&terrain, gameSettings.renderDistance);
-                Scenery_LoadBiome(&scenery, selectedBiome);
-                Scenery_SetRenderDistance(&scenery, gameSettings.renderDistance);
-
-                player.position = startPos;
-                player.heading = startYaw;
-                player.forward = (Vector3){ -sinf(startYaw), 0.0f, cosf(startYaw) };
-                player.velocity = Vector3Scale(player.forward, player.forwardSpeed);
-                FlightCamera_Init(&flightCamera, player.position, player.forward);
-                FX_Init();
-                Music_StartBiome(selectedBiome);
+            if (action == MENU_ACTION_OPEN_SEED_SELECT) {
+                gameState = GAME_STATE_SEED_SELECT;
+            } else if (action == MENU_ACTION_START_GAME) {
+                StartOrRestartFlight(&race, &player, &flightCamera, &terrain, &scenery, selectedBiome, selectedAircraftIdx, &gameSettings, currentRunSeed);
                 gameState = GAME_STATE_PLAYING;
             } else if (action == MENU_ACTION_TO_MAP_SELECT) {
                 gameState = GAME_STATE_MAP_SELECT;
@@ -305,6 +344,27 @@ int main(int argc, char *argv[]) {
             BeginTextureMode(sceneTarget);
                 ClearBackground(BLACK);
                 Menu_DrawAircraftSelect(curWidth, curHeight, selectedAircraftIdx, Aircraft_GetSprite(selectedAircraftIdx));
+            EndTextureMode();
+
+            float menuPhosphor = gameSettings.pixelFilterEnabled ? 0.65f : 0.25f;
+            PresentScreenWithCRT(sceneTarget, scanlineShader, locScanAlpha, locScanDistort, locScanPhosphor, locScanBlue,
+                                 0.045f, 0.0f, menuPhosphor, 0.0f, gameSettings.scanlinesEnabled, curWidth, curHeight, crtPowerOnTimer);
+        }
+        // ==========================================
+        // ESTADO 3.1: CONFIGURACIÓN DE SEED PROCEDURAL
+        // ==========================================
+        else if (gameState == GAME_STATE_SEED_SELECT) {
+            MenuAction action = Menu_UpdateSeedSelect(seedBuffer, sizeof(seedBuffer), &currentRunSeed);
+            if (action == MENU_ACTION_START_GAME) {
+                StartOrRestartFlight(&race, &player, &flightCamera, &terrain, &scenery, selectedBiome, selectedAircraftIdx, &gameSettings, currentRunSeed);
+                gameState = GAME_STATE_PLAYING;
+            } else if (action == MENU_ACTION_TO_AIRCRAFT_SELECT) {
+                gameState = GAME_STATE_AIRCRAFT_SELECT;
+            }
+
+            BeginTextureMode(sceneTarget);
+                ClearBackground(BLACK);
+                Menu_DrawSeedSelect(curWidth, curHeight, seedBuffer, selectedBiome);
             EndTextureMode();
 
             float menuPhosphor = gameSettings.pixelFilterEnabled ? 0.65f : 0.25f;
@@ -353,6 +413,70 @@ int main(int argc, char *argv[]) {
         // ESTADO 6: VUELO ACTIVO (PLAYING)
         // ==========================================
         else if (gameState == GAME_STATE_PLAYING) {
+            static bool s_wasDead = false;
+            static bool s_deathCrtSoundPlayed = false;
+
+            // --- GESTIÓN DE MUERTE CATASTRÓFICA Y WRECK DEBRIEFING ---
+            if (player.isDead) {
+                if (!s_wasDead) {
+                    s_wasDead = true;
+                    s_deathCrtSoundPlayed = false;
+                    Music_Stop();
+                    Audio_StopAll();
+                    player.deathQuoteIndex = rand() % 8;
+                }
+
+                player.deathTimer += dt;
+
+                // FASE 1: 0.0s a 2.0s -> PANTALLA EN NEGRO TOTAL Y SILENCIO ABSOLUTO
+                if (player.deathTimer < 2.0f) {
+                    BeginTextureMode(sceneTarget);
+                        ClearBackground(BLACK);
+                    EndTextureMode();
+
+                    PresentScreenWithCRT(sceneTarget, scanlineShader, locScanAlpha, locScanDistort, locScanPhosphor, locScanBlue,
+                                         0.0f, 0.0f, 0.0f, 0.0f, false, curWidth, curHeight, 2.0f);
+                } else {
+                    // FASE 2: >= 2.0s -> REINICIO DE TUBO CRT + PANTALLA WRECK DEBRIEFING EN INGLÉS
+                    if (!s_deathCrtSoundPlayed) {
+                        Audio_PlayCRTPowerOn();
+                        s_deathCrtSoundPlayed = true;
+                    }
+
+                    float deathCrtTimer = player.deathTimer - 2.0f;
+
+                    BeginTextureMode(sceneTarget);
+                        ClearBackground(BLACK);
+                        Menu_DrawWreckDebriefing(curWidth, curHeight, &player);
+                    EndTextureMode();
+
+                    float deathPhosphor = gameSettings.pixelFilterEnabled ? 0.75f : 0.35f;
+                    float deathBlue = gameSettings.blueFilterEnabled ? 0.60f : 0.0f;
+                    PresentScreenWithCRT(sceneTarget, scanlineShader, locScanAlpha, locScanDistort, locScanPhosphor, locScanBlue,
+                                         0.085f, 0.0f, deathPhosphor, deathBlue,
+                                         gameSettings.scanlinesEnabled, curWidth, curHeight, deathCrtTimer);
+
+                    // Sólo procesar entradas de reinicio cuando el tubo CRT ya empezó a iluminarse
+                    if (deathCrtTimer >= 0.30f) {
+                        MenuAction wreckAction = Menu_UpdateWreckDebriefing();
+                        if (wreckAction == MENU_ACTION_RESTART_GAME) {
+                            StartOrRestartFlight(&race, &player, &flightCamera, &terrain, &scenery, selectedBiome, selectedAircraftIdx, &gameSettings, currentRunSeed);
+                            s_wasDead = false;
+                            s_deathCrtSoundPlayed = false;
+                        } else if (wreckAction == MENU_ACTION_TO_MAIN_MENU) {
+                            gameState = GAME_STATE_MAIN_MENU;
+                            Music_PlayMenu();
+                            s_wasDead = false;
+                            s_deathCrtSoundPlayed = false;
+                        }
+                    }
+                }
+                continue;
+            } else {
+                s_wasDead = false;
+                s_deathCrtSoundPlayed = false;
+            }
+
             // Reinicio tras finalizar carrera (solo si no se están ingresando iniciales)
             if (race.isFinished) {
                 if (race.nameEntered || race.qualifyingRank < 0) {
@@ -360,20 +484,7 @@ int main(int argc, char *argv[]) {
                     if (IsGamepadAvailable(0) && IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) wantRestart = true;
 
                     if (wantRestart) {
-                        Vector3 startPos = { 0 };
-                        float startYaw = 0.0f;
-                        Race_Init(&race, selectedBiome, &startPos, &startYaw);
-
-                        Player_Init(&player);
-                        const AircraftDefinition *jet = Aircraft_Get(selectedAircraftIdx);
-                        Player_ApplyAircraft(&player, jet);
-                        player.position = startPos;
-                        player.heading = startYaw;
-                        player.forward = (Vector3){ -sinf(startYaw), 0.0f, cosf(startYaw) };
-                        player.velocity = Vector3Scale(player.forward, player.forwardSpeed);
-                        FlightCamera_Init(&flightCamera, player.position, player.forward);
-                        FX_Init();
-                        Music_StartBiome(selectedBiome);
+                        StartOrRestartFlight(&race, &player, &flightCamera, &terrain, &scenery, selectedBiome, selectedAircraftIdx, &gameSettings, currentRunSeed);
                     } else if (IsKeyPressed(KEY_ESCAPE)) {
                         gameState = GAME_STATE_MAIN_MENU;
                         Music_PlayMenu();
@@ -390,7 +501,20 @@ int main(int argc, char *argv[]) {
 
             // Simulación física de vuelo
             if (!race.isCountdown && !race.isFinished) {
+                float prevFlash = player.damageFlashTimer;
                 Player_Update(&player, &gameSettings, dt);
+                Scenery_CheckCollisions(&scenery, &player, dt);
+
+                if (player.isDead) {
+                    continue;
+                }
+
+                // Si ocurrió un impacto con árbol en este frame, generar trauma de cámara y sonido de golpe
+                if (prevFlash <= 0.0f && player.damageFlashTimer > 0.0f) {
+                    FlightCamera_AddTrauma(&flightCamera, 0.55f);
+                    Audio_PlayWallImpact();
+                }
+
                 if (player.wallImpactTriggered) {
                     FlightCamera_AddTrauma(&flightCamera, 0.45f);
                     player.wallImpactTriggered = false;
@@ -404,6 +528,12 @@ int main(int argc, char *argv[]) {
 
                 float speedRatio = player.forwardSpeed / player.afterburnerSpeed;
                 Audio_Update(speedRatio, player.isAfterburner, player.isAirbrake, player.altitudeAGL, dt);
+            } else if (race.isCountdown) {
+                // Durante la cuenta atrás: actualizar cámara, terreno y vegetación para que el suelo esté 100% generado y visible
+                FlightCamera_Update(&flightCamera, &player, dt);
+                Terrain_Update(&terrain, player.position);
+                Scenery_Update(&scenery, player.position);
+                Audio_Update(0.0f, false, false, player.altitudeAGL, dt);
             } else if (race.isFinished) {
                 // Detener propulsión y audio de vuelo en segundo plano al cruzar la meta
                 Audio_Update(0.0f, false, false, player.altitudeAGL, dt);
@@ -457,25 +587,7 @@ int main(int argc, char *argv[]) {
             if (action == MENU_ACTION_RESUME_GAME) {
                 gameState = GAME_STATE_PLAYING;
             } else if (action == MENU_ACTION_RESTART_GAME) {
-                Vector3 startPos = { 0 };
-                float startYaw = 0.0f;
-                Race_Init(&race, selectedBiome, &startPos, &startYaw);
-
-                Player_Init(&player);
-                const AircraftDefinition *jet = Aircraft_Get(selectedAircraftIdx);
-                Player_ApplyAircraft(&player, jet);
-                Terrain_LoadBiome(&terrain, selectedBiome);
-                Terrain_SetRenderDistance(&terrain, gameSettings.renderDistance);
-                Scenery_LoadBiome(&scenery, selectedBiome);
-                Scenery_SetRenderDistance(&scenery, gameSettings.renderDistance);
-
-                player.position = startPos;
-                player.heading = startYaw;
-                player.forward = (Vector3){ -sinf(startYaw), 0.0f, cosf(startYaw) };
-                player.velocity = Vector3Scale(player.forward, player.forwardSpeed);
-                FlightCamera_Init(&flightCamera, player.position, player.forward);
-                FX_Init();
-                Music_StartBiome(selectedBiome);
+                StartOrRestartFlight(&race, &player, &flightCamera, &terrain, &scenery, selectedBiome, selectedAircraftIdx, &gameSettings, currentRunSeed);
                 gameState = GAME_STATE_PLAYING;
             } else if (action == MENU_ACTION_TO_MAIN_MENU) {
                 gameState = GAME_STATE_MAIN_MENU;

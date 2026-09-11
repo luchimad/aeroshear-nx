@@ -21,8 +21,8 @@
 #define PATH_FONT_MENU          "assets/Fonts/Fusion.ttf"
 
 // --- Físicas y Dinámica de Vuelo 360° ---
-#define SPEED_CRUISE            440.0f      // Velocidad base hacia adelante (m/s)
-#define SPEED_AFTERBURNER       585.0f      // Velocidad máxima con Afterburner (+33%)
+#define SPEED_CRUISE            880.0f      // Velocidad base hacia adelante (m/s) - Duplicada
+#define SPEED_AFTERBURNER       1170.0f     // Velocidad máxima con Afterburner (+33%) - Duplicada
 #define ACCEL_AFTERBURNER       8.0f        // Aceleración de turbo
 #define DECEL_AFTERBURNER       5.0f        // Desaceleración al soltar turbo
 
@@ -37,7 +37,7 @@
 #define AUTOLEVEL_PITCH_SPEED   4.2f
 
 // --- Aceleración de Picada y Dinámica Vertical (Solución Bug Dive) ---
-#define DIVE_MAX_SINK_RATE      95.0f       // Velocidad máxima de picada voluntaria (m/s)
+#define DIVE_MAX_SINK_RATE      140.0f      // Velocidad máxima de picada voluntaria (m/s, mayor control de cabeceo abajo)
 #define DIVE_GRAVITY_ACCEL      65.0f       // Aceleración hacia abajo al empujar morro
 #define DIVE_SPEED_CONVERSION   110.0f      // Conversión de altitud a velocidad de avance forward
 
@@ -62,17 +62,17 @@
 
 // --- Sistema de Boost Energy Arcade ---
 #define PLAYER_MAX_BOOST        100.0f
-#define BOOST_DRAIN_RATE        17.0f       // ~6 segundos a fondo
+#define BOOST_DRAIN_RATE        25.5f       // Tasa de consumo aumentada un 50% (~4 segundos a fondo)
 #define BOOST_RECHARGE_CRUISE   12.0f       // Recarga pasiva
 #define BOOST_RECHARGE_BRAKE    28.0f       // Recarga rápida al frenar
 #define BOOST_PERFECT_GATE_BONUS 25.0f      // Bono instantáneo por centro
 
-// --- Sistema de Energía Cinética (Solución Bug KE Infinito) ---
-#define KE_DRAIN_CLIMB          76.0f       // Drenaje activo x2 por segundo al trepar
-#define KE_DRAIN_OVERDRIVE      56.0f       // Drenaje x2 por segundo en sobremarcha hipersónica
-#define KE_RECHARGE_SHEAR       42.0f       // Recarga por vuelo rasante en colchón (< 18m)
-#define KE_RECHARGE_APEX        32.0f       // Recarga por fuerza G centrífuga en ápice
-#define KE_RECHARGE_DIVE        45.0f       // Recarga por compresión dinámica al picar
+// --- Sistema de Energía Cinética (Ajustado: +50% duración, +50% recarga) ---
+#define KE_DRAIN_CLIMB          50.0f       // Drenaje por segundo al trepar (reducido para durar +50%)
+#define KE_DRAIN_OVERDRIVE      37.0f       // Drenaje por segundo en sobremarcha (reducido para durar +50%)
+#define KE_RECHARGE_SHEAR       63.0f       // Recarga por vuelo rasante en colchón (+50%)
+#define KE_RECHARGE_APEX        48.0f       // Recarga por fuerza G centrífuga en ápice (+50%)
+#define KE_RECHARGE_DIVE        67.5f       // Recarga por compresión dinámica al picar (+50%)
 
 // --- Terreno Procedural Infinito ---
 #define TERRAIN_CHUNK_SIZE      525.0f
@@ -112,6 +112,15 @@
 #define PATH_TEX_TREE_3         "assets/Sprites/Objects/Tree_3.png"
 #define PATH_TEX_DESERT_BUSH_1  "assets/Sprites/Objects/DesertBush_1.png"
 #define PATH_TEX_DESERT_BUSH_2  "assets/Sprites/Objects/DesertBush_2.png"
+#define PATH_TEX_BUILD_SMALL_1  "assets/Sprites/Objects/building_small_1.png"
+#define PATH_TEX_BUILD_SMALL_2  "assets/Sprites/Objects/building_small_2.png"
+#define PATH_TEX_BUILD_TALL_1   "assets/Sprites/Objects/building_tall_1.png"
+#define PATH_TEX_BUILD_TALL_2   "assets/Sprites/Objects/building_tall_2.png"
+
+// --- Parámetros de Daño y Blindaje ---
+#define PLAYER_MAX_HULL         100.0f
+#define DAMAGE_TREE_STRIKE      20.0f
+#define COLLISION_INVULN_TIME   0.40f
 
 // --- Configuración de Carrera Alpha ---
 #define RACE_TOTAL_CHECKPOINTS  18

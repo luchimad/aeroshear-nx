@@ -92,6 +92,53 @@ void HUD_Draw(const PlayerJet *player, int screenWidth, int screenHeight) {
     int spdY = screenHeight - 125;
     bool isOverdrive = player->isAfterburner && (player->kineticEnergy > 20.0f);
 
+    // 3b. INDICADOR DE INTEGRIDAD DEL CASCO (HULL INTEGRITY // tDR SPEC)
+    float hullPct = player->hullIntegrity / ((player->maxHullIntegrity > 0.0f) ? player->maxHullIntegrity : 100.0f);
+    hullPct = Clamp(hullPct, 0.0f, 1.0f);
+
+    Color hullCol = (hullPct > 0.50f) ? hudCol : ((hullPct > 0.25f) ? (Color){ 245, 180, 50, 255 } : alertCol);
+    if (player->damageFlashTimer > 0.0f) hullCol = (Color){ 255, 50, 50, 255 };
+
+    UI_DrawTextHud(TextFormat("HULL // %3.0f%%", hullPct * 100.0f), (float)spdX, (float)(spdY - 24), 10.0f, hullCol);
+
+    // 5 segmentos de blindaje (20% cada uno)
+    float segW = 16.0f;
+    float segH = 6.0f;
+    float segGap = 3.0f;
+    float segStartX = (float)spdX + 74.0f;
+    float segY = (float)(spdY - 22);
+
+    for (int s = 0; s < 5; s++) {
+        float segThreshold = (float)(s + 1) * 0.20f;
+        Rectangle segRec = { segStartX + (float)s * (segW + segGap), segY, segW, segH };
+        if (hullPct >= segThreshold - 0.01f) {
+            DrawRectangleRec(segRec, hullCol);
+        } else {
+            DrawRectangleLinesEx(segRec, 1.0f, (Color){ hudDim.r, hudDim.g, hudDim.b, 80 });
+        }
+    }
+
+    // 3c. ALERTA TÁCTICA DE IMPACTO / DAÑO
+    if (player->alertTimer > 0.0f && player->lastAlertText[0] != '\0') {
+        float alertAlpha = fminf(1.0f, player->alertTimer * 2.0f);
+        float blink = sinf((float)GetTime() * 16.0f) * 0.5f + 0.5f;
+        Color bgWarn = (Color){ 45, 8, 8, (unsigned char)(220.0f * alertAlpha) };
+        Color borderWarn = (blink > 0.3f) ? (Color){ 255, 45, 45, (unsigned char)(240.0f * alertAlpha) }
+                                          : (Color){ 160, 20, 20, (unsigned char)(180.0f * alertAlpha) };
+        Color textWarn = (Color){ 255, 220, 220, (unsigned char)(255.0f * alertAlpha) };
+
+        Vector2 txtSize = UI_MeasureTextHud(player->lastAlertText, 12.0f);
+        float boxW = txtSize.x + 36.0f;
+        float boxH = 26.0f;
+        float boxX = screenCenter.x - boxW * 0.5f;
+        float boxY = 74.0f;
+
+        Rectangle alertRec = { boxX, boxY, boxW, boxH };
+        DrawRectangleRounded(alertRec, 0.2f, 4, bgWarn);
+        DrawRectangleRoundedLinesEx(alertRec, 0.2f, 4, 1.5f, borderWarn);
+        UI_DrawTextHud(player->lastAlertText, boxX + 18.0f, boxY + 6.0f, 12.0f, textWarn);
+    }
+
     UI_DrawTDRSpeedometer(spdX, spdY, player->speedKmh, player->machNumber,
                           player->boostEnergy, player->maxBoostEnergy,
                           player->isAfterburner, player->isAirbrake, player->isBoostDepleted, isOverdrive,

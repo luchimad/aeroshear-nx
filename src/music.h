@@ -11,6 +11,7 @@
 
 void Music_Init(void);
 void Music_Update(float dt);
+void Music_PlayBootMenu(void);
 void Music_PlayMenu(void);
 void Music_StartBiome(BiomeType biome);
 void Music_NextTrack(void);
@@ -20,6 +21,7 @@ const char* Music_GetCurrentTitle(void);
 const char* Music_GetCurrentArtist(void);
 float Music_GetOsdTimer(void);
 void Music_TriggerDucking(float duration);
+void Music_ScanFolders(void);
 void Music_Stop(void);
 void Music_Unload(void);
 
